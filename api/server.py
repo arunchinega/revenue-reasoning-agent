@@ -142,7 +142,7 @@ def approve():
                     _say(fn(s2), SS.DUET_SPEAKER.get(intent, "narrator"))
             run_capabilities(st, use_llm=RUN["use_llm"],
                              on_capability_done=_on_cap)
-            RUN["summary"] = run_narration(st, use_llm=RUN["use_llm"])
+            RUN["summary"] = run_narration(st, use_llm=False)  # deterministic narrator (one-LLM config)
             RUN["phase"] = "done"          # results FIRST — never wait on audio
             threading.Thread(target=_voice_job, args=(st,), daemon=True).start()
         except Exception as e:  # noqa: BLE001
@@ -168,10 +168,10 @@ def status():
             lk = r.get("leakage", {})
             fc = r.get("forecasting", {})
             out["hero"] = lk.get("total_impact_estimate")
-            # ---- chart payloads ----
+            # ---- chart payloads (each isolated; failures logged, never fatal) ----
+            import pandas as pd
+            cm = st.column_map
             try:
-                import pandas as pd
-                cm = st.column_map
                 df = st.feature_df if st.feature_df is not None else st.raw_df
                 d = df[[cm["date_column"], cm["target_column"]]].copy()
                 d[cm["date_column"]] = pd.to_datetime(d[cm["date_column"]])
@@ -179,23 +179,36 @@ def status():
                     .sum().sort_index().tail(90)
                 out["series"] = {"dates": [str(x.date()) for x in ser.index],
                                  "values": [round(float(v), 2) for v in ser.values]}
-                out["forecast"] = fc.get("forecast", [])[:30]
+            except Exception as e:  # noqa: BLE001
+                print(f"[charts] series: {e}", flush=True)
+            try:
+                fcast = fc.get("forecast") or []
+                out["forecast"] = [round(float(x), 2) for x in fcast[:30]]
+            except Exception as e:  # noqa: BLE001
+                print(f"[charts] forecast: {e}", flush=True)
+            try:
                 out["rules"] = [{"rule": k, "impact": round(v.get("impact_total", 0)),
                                  "hits": v.get("hits", 0)}
-                                for k, v in lk.get("rules_fired", {}).items()
+                                for k, v in (lk.get("rules_fired") or {}).items()
                                 if v.get("hits")]
+            except Exception as e:  # noqa: BLE001
+                print(f"[charts] rules: {e}", flush=True)
+            try:
                 an = r.get("anomaly", {})
-                pts = [f for f in an.get("flagged", [])
+                pts = [f for f in (an.get("flagged") or [])
                        if f.get("tier") in ("high", "medium")][:400]
                 out["anoms"] = [{"d": str(f.get("date"))[:10],
-                                 "v": float(f.get(cm["target_column"], 0)),
+                                 "v": float(f.get(cm["target_column"]) or 0),
                                  "t": f.get("tier")} for f in pts]
-                out["bakeoff"] = [{"m": m["model"], "mape": m.get("mape")}
-                                  for m in fc.get("metrics", [])
+            except Exception as e:  # noqa: BLE001
+                print(f"[charts] anoms: {e}", flush=True)
+            try:
+                out["bakeoff"] = [{"m": m["model"], "mape": round(float(m["mape"]), 2)}
+                                  for m in (fc.get("metrics") or [])
                                   if m.get("mape") is not None]
                 out["winner_name"] = fc.get("winner")
             except Exception as e:  # noqa: BLE001
-                print(f"[charts] payload error: {e}", flush=True)
+                print(f"[charts] bakeoff: {e}", flush=True)
             out["stories"] = {k: fn(st) for k, fn in SS.CAPABILITY_STORIES.items()
                               if k in r and "error" not in r.get(k, {})}
             out["winner"] = fc.get("winner_label")
@@ -216,6 +229,25 @@ def clip(i: int):
 def chartjs():
     return Response((Path(__file__).parent.parent / "web" / "chart.js")
                     .read_bytes(), media_type="application/javascript")
+
+
+@app.get("/api/report")
+def report():
+    st = RUN["state"]
+    if st is None or RUN["phase"] != "done":
+        return Response(status_code=404)
+    try:
+        from agents.exporter import build_docx
+        out = Path(tempfile.mkdtemp(prefix="rra_doc_")) / "RRA_report.docx"
+        build_docx(st, RUN["summary"] or "", str(out))
+        return Response(out.read_bytes(),
+                        media_type="application/vnd.openxmlformats-officedocument"
+                                   ".wordprocessingml.document",
+                        headers={"Content-Disposition":
+                                 'attachment; filename="RRA_report.docx"'})
+    except Exception as e:  # noqa: BLE001
+        print(f"[report] {type(e).__name__}: {e}", flush=True)
+        return Response(status_code=500)
 
 
 @app.get("/api/audio")

@@ -46,7 +46,6 @@ button:disabled{opacity:.5}input,textarea{width:100%;background:#0f141a;color:va
   <div class="grid">
     <div class="card"><b>📈 Revenue & forward view</b><canvas id="cfc" height="190"></canvas></div>
     <div class="card"><b>🏆 Model bake-off (MAPE %)</b><canvas id="cbk" height="190"></canvas></div>
-    <div class="card"><b>💸 Leakage by rule</b><canvas id="clk" height="190"></canvas></div>
     <div class="card"><b>🚨 Anomalies on the revenue line</b><canvas id="can" height="190"></canvas></div>
   </div>
   <div class="grid">
@@ -54,6 +53,7 @@ button:disabled{opacity:.5}input,textarea{width:100%;background:#0f141a;color:va
     <div class="card"><b>💸 Leakage rules</b><div id="trul"></div></div>
   </div>
   <div class="grid" id="stories"></div>
+  <div class="card" style="text-align:center"><a href="/api/report" download><button>⬇ Download Word report</button></a></div>
   <div class="card"><b>Executive summary</b><div id="summary" style="white-space:pre-wrap;color:var(--mut);font-size:14px"></div></div>
   <div class="card"><b>Decision ledger</b><div id="ledger2"></div></div>
 </div>
@@ -66,8 +66,9 @@ let played=0,playing=false,clipsAvail=0;
 function tryPlay(){if(playing||played>=clipsAvail)return;playing=true;
  const a=$('voice');a.src='/api/clip/'+played;
  a.onended=()=>{played++;playing=false;setTimeout(tryPlay,250)};
- a.onerror=()=>{playing=false};
- a.play().catch(()=>{playing=false})}
+ a.onerror=()=>{playing=false;setTimeout(tryPlay,2000)};
+ a.play().catch(()=>{playing=false;setTimeout(tryPlay,2000)})}
+setInterval(()=>{if(!playing&&played<clipsAvail)tryPlay()},2000);
 $('go').onclick=async()=>{const f=$('csv').files[0];if(!f){alert('choose a CSV');return}
   const fd=new FormData();fd.append('file',f);fd.append('nl',$('nl').value);fd.append('use_llm',$('llm').checked);
   $('go').disabled=true;await fetch('/api/run',{method:'POST',body:fd});
@@ -114,9 +115,6 @@ function drawCharts(s){try{
   mk('cbk',{type:'bar',data:{labels:bs.map(x=>x.m),datasets:[{data:bs.map(x=>x.mape),
    backgroundColor:bs.map(x=>x.m===s.winner_name?T:'#3a4756')}]},
    options:{indexAxis:'y',plugins:{legend:{display:false}}}})}
- if(s.rules){mk('clk',{type:'bar',data:{labels:s.rules.map(x=>x.rule),
-  datasets:[{data:s.rules.map(x=>x.impact),backgroundColor:A}]},
-  options:{indexAxis:'y',plugins:{legend:{display:false}}}})}
  if(s.anoms&&s.series){mk('can',{type:'scatter',data:{datasets:[
   {type:'line',label:'revenue',data:s.series.dates.map((d,i)=>({x:d,y:s.series.values[i]})),
    borderColor:G,pointRadius:0,borderWidth:1},
