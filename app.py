@@ -173,6 +173,23 @@ def _story_card(icon: str, title: str, story: str, speak: bool = True,
         _speak(script or f"{title}. {story}", speaker=speaker)
 
 
+@st.cache_resource
+def _run_cache() -> dict:
+    """Server-side, survives browser refresh / new sessions."""
+    return {}
+
+
+def _checkpoint(phase: str) -> None:
+    try:
+        _run_cache()["last"] = {
+            "state": st.session_state.get("state"),
+            "summary": st.session_state.get("summary", ""),
+            "phase": phase,
+        }
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _phase() -> str:
     return st.session_state.get("phase", "idle")
 
@@ -267,6 +284,7 @@ def screen_run(up, readme_up, nl, use_llm):
             st.session_state["state"] = state
             st.session_state["phase"] = "confirm"
             st.session_state["journey_told"] = False
+            _checkpoint("confirm")
         else:
             # ASYNC: heavy work in a worker thread; the page never blocks, so
             # the websocket stays alive and the tab can never white-screen.
@@ -330,6 +348,7 @@ def screen_run(up, readme_up, nl, use_llm):
                     st.session_state["worker"] = None
                     st.session_state["phase"] = "confirm"
                     st.session_state["journey_told"] = False
+                    _checkpoint("confirm")
                     st.rerun()
                 stt = (st.session_state.get("state")
                        or st.session_state.get("state_live"))
@@ -477,6 +496,7 @@ def screen_run(up, readme_up, nl, use_llm):
                 st.stop()
             st.session_state["summary"] = summary
             st.session_state["phase"] = "done"
+            _checkpoint("done")
         else:
             # ASYNC PARALLEL: independent capabilities race in threads; cards
             # open the moment each lands; narration queues over them.
@@ -523,6 +543,7 @@ def screen_run(up, readme_up, nl, use_llm):
                     st.session_state["worker"] = None
                     st.session_state["caps_started"] = False
                     st.session_state["phase"] = "done"
+                    _checkpoint("done")
                     st.rerun()
             _exec_poll()
             st.stop()
@@ -1129,6 +1150,16 @@ with st.sidebar:
             st.warning("Ollama not reachable — calls will fall back per-agent.")
         run_btn = st.button("▶ Run analysis", type="primary", key="run",
                             disabled=up is None, width='stretch')
+        _cached = _run_cache().get("last")
+        if _phase() == "idle" and _cached and _cached.get("state") is not None:
+            if st.button("⟳ Resume last run", key="resume", width='stretch',
+                         help="Restores the previous run after a page refresh "
+                              "— the analysis lives server-side."):
+                st.session_state["state"] = _cached["state"]
+                st.session_state["summary"] = _cached["summary"]
+                st.session_state["phase"] = _cached["phase"]
+                st.session_state["journey_told"] = True
+                st.rerun()
         if run_btn and up is not None:
             st.session_state.pop("state", None)
             st.session_state["phase"] = "perceive"
