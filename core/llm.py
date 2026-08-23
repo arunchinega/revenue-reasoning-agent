@@ -138,3 +138,30 @@ def warm_up(roles: tuple[str, ...] = ("reasoner", "narrator")) -> dict[str, floa
         except Exception as e:  # noqa: BLE001
             timings[role] = -1.0
     return timings
+
+
+def as_text(v, joiner: str = " → ") -> str:
+    """Coerce any LLM-returned value to a string (lists of CoT steps included)."""
+    if isinstance(v, (list, tuple)):
+        return joiner.join(str(x) for x in v)
+    if isinstance(v, dict):
+        return joiner.join(f"{k}: {x}" for k, x in v.items())
+    return "" if v is None else str(v)
+
+
+def as_float(v, default: float | None = None):
+    import re
+    if isinstance(v, (int, float)):
+        return float(v)
+    m = re.search(r"[\d.]+", str(v or ""))
+    return float(m.group()) if m else default
+
+
+def as_str_list(v) -> list[str]:
+    out = []
+    for x in (v if isinstance(v, (list, tuple)) else [v] if v else []):
+        if isinstance(x, dict):
+            x = next((str(t) for t in x.values() if isinstance(t, str)), None)
+        if isinstance(x, str) and x.strip():
+            out.append(x.strip())
+    return out

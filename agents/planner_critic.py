@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import numpy as np
 
-from core.llm import call_json
+from core.llm import MODELS, call_json
 from core.state import RunState
 from capabilities.forecasting import (
     CandidateResult, metrics_table, prepare_series, registry_eligibility,
@@ -51,6 +51,35 @@ def _fallback_plan(eligibility: dict) -> dict:
     }
 
 
+def _sanitize_llm_plan(plan: dict) -> dict:
+    """LLMs return creative shapes — coerce every field to its contract.
+    (CoT prompts especially invite reasoning-as-list-of-steps.)"""
+    import re as _re
+    if not isinstance(plan, dict):
+        return {}
+    r = plan.get("reasoning", "")
+    if isinstance(r, (list, tuple)):
+        r = " → ".join(str(x) for x in r)
+    plan["reasoning"] = str(r)
+    cands = plan.get("candidates", [])
+    flat = []
+    for c in cands if isinstance(cands, (list, tuple)) else []:
+        if isinstance(c, dict):
+            c = c.get("model") or c.get("name") or next(iter(c.values()), None)
+        if isinstance(c, str) and c.strip():
+            flat.append(c.strip())
+    plan["candidates"] = flat
+    am = plan.get("acceptance_mape")
+    if not isinstance(am, (int, float)):
+        m = _re.search(r"[\d.]+", str(am or ""))
+        plan["acceptance_mape"] = float(m.group()) if m else None
+    pp = plan.get("preprocessing")
+    if isinstance(pp, (list, tuple)):
+        pp = {str(k): True for k in pp}
+    plan["preprocessing"] = pp if isinstance(pp, dict) else {}
+    return plan
+
+
 def plan_forecasting(state: RunState, use_llm: bool = True) -> dict:
     ts_ev = (state.eda_report.get("timeseries") or {})
     eligibility = registry_eligibility(ts_ev)
@@ -76,7 +105,9 @@ def plan_forecasting(state: RunState, use_llm: bool = True) -> dict:
             required_keys=("candidates",),
             fallback=lambda: _fallback_plan(eligibility),
         )
-        plan = llm.parsed
+        plan = _sanitize_llm_plan(llm.parsed or {})
+        if plan.get("acceptance_mape") is None:
+            plan["acceptance_mape"] = ACCEPT_MAPE
         # sanitize: only eligible registry names, floor always present
         plan["candidates"] = [c for c in plan.get("candidates", [])
                               if eligibility.get(c, {}).get("eligible")]
@@ -95,7 +126,7 @@ def plan_forecasting(state: RunState, use_llm: bool = True) -> dict:
             plan = _fallback_plan(eligibility)
         plan.setdefault("preprocessing", {"fill_gaps": True})
         plan.setdefault("acceptance_mape", ACCEPT_MAPE)
-        agent = "deterministic" if llm.used_fallback else "llama-3.1-8b"
+        agent = "deterministic" if llm.used_fallback else MODELS["reasoner"]
     else:
         plan = _fallback_plan(eligibility)
         agent = "deterministic"
@@ -252,11 +283,15 @@ def critique_forecasting(state: RunState, results: dict[str, CandidateResult],
             required_keys=("reasoning",),
             fallback=lambda: {"reasoning": verdict["reasoning"]},
         )
-        if llm.parsed and not llm.used_fallback:
-            verdict["reasoning"] = llm.parsed["reasoning"]
+        if llm.parsed and not llm.used_fallback and "reasoning" in llm.parsed:
+            r = llm.parsed["reasoning"]
+            if isinstance(r, (list, tuple)):
+                r = " → ".join(str(x) for x in r)
+            if isinstance(r, str) and r.strip():
+                verdict["reasoning"] = r
 
     state.ledger.log(
-        stage="critic", agent="llama-3.1-8b" if use_llm else "deterministic",
+        stage="critic", agent=MODELS["reasoner"] if use_llm else "deterministic",
         decision=f"[attempt {attempt + 1}] {verdict['verdict']}"
                  + (f" → {verdict.get('winner')}" if verdict.get("winner") else "")
                  + (f" → blend {verdict['ensemble']['members']}" if verdict.get("ensemble") else ""),

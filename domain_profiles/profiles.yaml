@@ -29,8 +29,21 @@ banking:
     forecasting: [fee income forecast, revenue projection]
   leakage_rules: [fee_schedule_mismatch, excess_waivers, zero_billed_with_usage, billed_vs_expected_delta, duplicate_billing]
 
+ecommerce:
+  display: "E-commerce orders"
+  schema_signals: [order, sku, cart, discount, units, unit_price, category,
+                   state, region, shipment, courier, channel]
+  intent_vocab:
+    leakage: [discount abuse, unbilled orders, zero charged, undercharge,
+              margin leak, promo abuse]
+    anomaly: [order anomalies, price errors, duplicate orders, fraud]
+    rca: [region drop, state decline, category decline, demand dip]
+    segment: [customer segments, buyer personas, cohorts]
+  leakage_rules: [billed_vs_expected_delta, zero_billed_with_usage,
+                  duplicate_billing, excessive_discount]
+
 generic:
   display: "Generic revenue data"
   schema_signals: []
   intent_vocab: {}
-  leakage_rules: [billed_vs_expected_delta, zero_billed_with_usage, duplicate_billing]
+  leakage_rules: [billed_vs_expected_delta, zero_billed_with_usage, duplicate_billing, excessive_discount]

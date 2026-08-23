@@ -15,7 +15,7 @@ from pathlib import Path
 
 import yaml
 
-from core.llm import call_json
+from core.llm import MODELS, as_text, as_float, as_str_list, call_json
 from core.state import RunState
 
 PROFILES_PATH = Path(__file__).resolve().parents[1] / "domain_profiles" / "profiles.yaml"
@@ -90,9 +90,9 @@ def run_domain_detection(state: RunState, use_llm: bool = True) -> RunState:
         if name in profiles:
             result = {
                 "name": name,
-                "confidence": float(parsed.get("confidence", heuristic["confidence"])),
+                "confidence": as_float(parsed.get("confidence"), heuristic["confidence"]),
                 "evidence": parsed.get("evidence", heuristic["evidence"]),
-                "reasoning": parsed.get("reasoning", ""),
+                "reasoning": as_text(parsed.get("reasoning", "")),
                 "method": "heuristic_fallback" if llm.used_fallback else "llm",
             }
 
@@ -101,7 +101,7 @@ def run_domain_detection(state: RunState, use_llm: bool = True) -> RunState:
     hitl = result["confidence"] < HITL_THRESHOLD
     state.ledger.log(
         stage="domain_detection",
-        agent="deterministic" if result["method"].startswith("heuristic") else "llama-3.1-8b",
+        agent="deterministic" if result["method"].startswith("heuristic") else MODELS["reasoner"],
         decision=f"Domain: {result['name']} ({profiles[result['name']]['display']})",
         reasoning=result.get("reasoning")
                   or f"schema signals matched: {result['evidence'] or 'none — generic fallback'}",

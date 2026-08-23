@@ -7,7 +7,7 @@ the latency shortcut for dead-obvious universal phrasing.
 """
 from __future__ import annotations
 
-from core.llm import call_json
+from core.llm import MODELS, as_text, as_float, as_str_list, call_json
 from core.state import RunState
 from stages.domain_detect import assemble_context
 
@@ -98,11 +98,19 @@ def run_intent_detection(state: RunState, use_llm: bool = True) -> RunState:
             },
         )
         parsed = llm.parsed or {}
-        intents = [i for i in parsed.get("intents", []) if i in INTENTS]
+        intents = [i for i in as_str_list(parsed.get("intents", [])) if i in INTENTS]
+        # INTENT FLOOR: the LLM may sharpen the reading but never shrink it —
+        # union with the deterministic keyword detector so an explicitly
+        # requested capability can never be silently dropped
+        missed = [i for i in kw_intents if i not in intents]
+        if intents and missed:
+            intents = intents + missed
+        floor_note = (f" | intent floor restored: {missed} (keyword-evident "
+                      f"in the request)" if intents and missed else "")
         result = {
             "intents": intents or kw_intents or ["anomaly", "forecasting"],
-            "confidence": float(parsed.get("confidence", 0.4)),
-            "reasoning": parsed.get("reasoning", ""),
+            "confidence": as_float(parsed.get("confidence"), 0.4),
+            "reasoning": as_text(parsed.get("reasoning", "")) + floor_note,
             "method": "keyword_fallback" if llm.used_fallback else "llm",
         }
     else:
@@ -119,7 +127,7 @@ def run_intent_detection(state: RunState, use_llm: bool = True) -> RunState:
 
     state.ledger.log(
         stage="intent_detection",
-        agent="llama-3.1-8b" if result["method"] == "llm" else "deterministic",
+        agent=MODELS["reasoner"] if result["method"] == "llm" else "deterministic",
         decision=f"Intents: {ordered}",
         reasoning=result["reasoning"]
                   + (f"; dependencies auto-added: {dep_added}" if dep_added else ""),

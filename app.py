@@ -52,7 +52,13 @@ SCREENS = ["▶ Run", "📖 Findings", "📊 Data & Features", "🔬 Evidence", 
 
 # ---------------------------------------------------------------- helpers
 def _badge(agent: str) -> str:
-    return AGENT_BADGE.get(agent, "🤖") + " " + agent
+    if st.session_state.get("show_models"):
+        return AGENT_BADGE.get(agent, "🤖") + " " + agent
+    if agent == "deterministic":
+        return "⚙️ rules-verified"
+    if agent == "human":
+        return "🧑 human"
+    return "🤖 AI"
 
 
 def _entry_md(e) -> str:
@@ -160,12 +166,18 @@ def _speak(text: str, speaker: str | None = None) -> None:
 
 def _story_card(icon: str, title: str, story: str, speak: bool = True,
                 script: str | None = None, stage_key: str | None = None) -> None:
-    """Card shows the tight story; the voice speaks the richer script.
-    In Duet mode the stage decides which of the two voices speaks."""
+    """Card shows the tight story; the voice speaks the richer script — ONCE.
+    Widget interactions rerun the script; without this guard every dropdown
+    touch re-queues the speech (the 'kept repeating the plan' bug)."""
     with st.container(border=True):
         st.markdown(f"#### {icon} {title}")
         st.markdown(story)
     if speak:
+        spoken = st.session_state.setdefault("spoken_once", set())
+        key = stage_key or title
+        if key in spoken:
+            return
+        spoken.add(key)
         speaker = None
         if stage_key:
             from agents.stage_stories import DUET_SPEAKER
@@ -211,6 +223,34 @@ def _start_worker(target, *args) -> None:
 def _worker_alive() -> bool:
     t = st.session_state.get("worker")
     return bool(t is not None and t.is_alive())
+
+
+def _kpi_strip(state) -> None:
+    """Headline numbers, same on every screen — instant scannability."""
+    r = state.results
+    k = st.columns(5)
+    ing = state.ingest_report or {}
+    k[0].metric("Records", f"{ing.get('rows', 0):,}")
+    lk = r.get("leakage", {})
+    if lk and "error" not in lk:
+        k[1].metric("💸 Money at risk", f"{lk.get('total_impact_estimate', 0):,.0f}",
+                    f"{lk.get('candidate_count', 0)} records", delta_color="inverse")
+    an = r.get("anomaly", {})
+    if an and "error" not in an:
+        c = an.get("counts", {})
+        k[2].metric("🚨 Anomalies", f"{c.get('high', 0)} high",
+                    f"{c.get('medium', 0)} med", delta_color="off")
+    fc = r.get("forecasting", {})
+    if fc and "error" not in fc:
+        wc = fc.get("winner_card") or {}
+        k[3].metric("📈 Forecast", fc.get("winner_label", "—")[:22],
+                    f"MAPE {wc['mape']:.2f}%" if wc.get("mape") is not None
+                    else fc.get("verdict"), delta_color="off")
+    n_llm = sum(1 for e in state.ledger.entries
+                if e.agent not in ("deterministic", "human"))
+    k[4].metric("🧠 Decisions", len(state.ledger.entries), f"{n_llm} AI",
+                delta_color="off")
+    st.markdown("---")
 
 
 def _need_results() -> bool:
@@ -410,9 +450,35 @@ def screen_run(up, readme_up, nl, use_llm):
         _story_card("🗺️", "The plan", SS.plan_story(state),
                     script=SS.SPEAK["plan"](state), stage_key="plan")
         dom = state.domain
-        st.info(f"Detected domain: **{dom.get('profile', {}).get('display', dom.get('name'))}** "
-                f"({dom.get('confidence', 0):.0%}) — evidence: "
-                f"{', '.join(dom.get('evidence', [])[:5])}")
+        conf = dom.get("confidence", 0)
+        if conf < 0.65:
+            st.warning(f"🤔 Weak domain signal: my best guess is "
+                       f"**{dom.get('profile', {}).get('display', dom.get('name'))}** "
+                       f"at only {conf:.0%} — please correct me below if I'm wrong.")
+        else:
+            st.info(f"Detected domain: **{dom.get('profile', {}).get('display', dom.get('name'))}** "
+                    f"({conf:.0%}) — evidence: "
+                    f"{', '.join(dom.get('evidence', [])[:5])}")
+        try:
+            from stages.domain_detect import load_profiles
+            _profs = load_profiles()
+        except Exception:  # noqa: BLE001
+            _profs = {}
+        if _profs:
+            _names = list(_profs)
+            _cur = dom.get("name") if dom.get("name") in _names else _names[-1]
+            pick_dom = st.selectbox(
+                "Domain (editable — human override)", _names,
+                index=_names.index(_cur), key="sel_domain",
+                format_func=lambda n: _profs[n].get("display", n))
+            if pick_dom != dom.get("name"):
+                state.domain = {"name": pick_dom, "profile": _profs[pick_dom],
+                                "confidence": 1.0,
+                                "evidence": ["human override at plan approval"]}
+                state.ledger.log(stage="domain_detection", agent="human",
+                                 decision=f"Domain corrected to '{pick_dom}' by human",
+                                 reasoning="override at plan approval",
+                                 hitl_required=True, hitl_resolution="corrected")
 
         cm = state.column_map
         cols = list(state.raw_df.columns)
@@ -448,6 +514,10 @@ def screen_run(up, readme_up, nl, use_llm):
                                        f"intents={state.intents}",
                              hitl_required=True, hitl_resolution="approved")
             st.session_state["phase"] = "execute"
+            if st.session_state.get("voice_on"):
+                import streamlit.components.v1 as _c
+                _c.html("<script>try{window.speechSynthesis.cancel();}"
+                        "catch(e){}</script>", height=0)
         if _phase() == "confirm":
             st.stop()
 
@@ -618,6 +688,88 @@ def screen_findings():
     st.markdown("---")
     st.markdown(st.session_state.get("summary", "_No narrative available._"))
     st.markdown("---")
+
+    # ---- 💬 Ask the agent — computed live from results, spoken aloud ----
+    st.markdown("### 💬 Ask the agent")
+    cm = state.column_map
+    df_all = _frame(state)
+    lk = r.get("leakage", {}) if "error" not in r.get("leakage", {}) else {}
+    cand = pd.DataFrame(lk.get("candidates", []))
+    seg_col = next((c for c in df_all.columns
+                    if c.lower() in ("state", "region", "segment", "category")
+                    and df_all[c].nunique() <= 15), None)
+
+    def _leak_by(dim_col):
+        if cand.empty or "row_index" not in cand.columns or dim_col is None:
+            return None
+        j = cand.set_index("row_index").join(df_all[[dim_col]], how="left")
+        return j.groupby(dim_col)["impact_estimate"].sum().sort_values(ascending=False)
+
+    qcols = st.columns(3)
+    QS = [f"Which {seg_col or 'segment'} leaks the most revenue?",
+          "Which customers are the riskiest?",
+          "Why did revenue move recently?",
+          "How confident is the forecast?",
+          "Where do the anomalies concentrate?",
+          "What should we do first?"]
+    for i, q in enumerate(QS):
+        if qcols[i % 3].button(q, key=f"ask_{i}", width='stretch'):
+            st.session_state["asked"] = i
+    asked = st.session_state.get("asked")
+    if asked is not None:
+        ans, chart = "", None
+        if asked == 0:
+            byd = _leak_by(seg_col)
+            if byd is not None and len(byd):
+                top = byd.index[0]
+                ans = (f"**{top}** carries the largest leakage: "
+                       f"{byd.iloc[0]:,.0f} of {byd.sum():,.0f} "
+                       f"({byd.iloc[0] / max(byd.sum(), 1):.0%}).")
+                chart = byd
+            else:
+                ans = "I couldn't attribute leakage by that dimension."
+        elif asked == 1:
+            if not cand.empty and "entity" in cand.columns:
+                bye = cand.groupby("entity")["impact_estimate"].sum()                     .sort_values(ascending=False).head(5)
+                ans = ("Top at-risk customers: "
+                       + "; ".join(f"**{e}** ({v:,.0f})" for e, v in bye.items()) + ".")
+                chart = bye
+            else:
+                ans = "No customer-level leakage candidates this run."
+        elif asked == 2:
+            from agents.stage_stories import rca_story
+            ans = rca_story(state)
+        elif asked == 3:
+            from agents.stage_stories import verdict_story
+            ans = verdict_story(state)
+        elif asked == 4:
+            an2 = r.get("anomaly", {})
+            ents = [f.get("entity") for f in an2.get("flagged", [])
+                    if f.get("tier") == "high" and f.get("entity")]
+            from collections import Counter
+            топ = Counter(ents).most_common(4)
+            ans = ("High-confidence anomalies concentrate in: "
+                   + "; ".join(f"**{e}** ({n} flags)" for e, n in топ) + "."
+                   ) if топ else "No high-tier anomalies to localize."
+        elif asked == 5:
+            from agents.stage_stories import recommend_story
+            ans = recommend_story(state)
+            recs = r.get("recommend", {}).get("recommendations", [])
+            if recs:
+                ans += f" Start with: **{recs[0].get('action', '')}**"
+        with st.container(border=True):
+            st.markdown(f"**Q: {QS[asked]}**")
+            st.markdown(ans)
+            if chart is not None and HAS_PLOTLY:
+                figq = go.Figure(go.Bar(x=chart.values, y=chart.index.astype(str),
+                                        orientation="h", marker_color=AMBER))
+                figq.update_yaxes(autorange="reversed")
+                _show(_layout(figq, height=60 + 40 * len(chart)))
+        if st.session_state.get("last_spoken_q") != asked:
+            st.session_state["last_spoken_q"] = asked
+            _speak(ans.replace("**", ""))
+
+    st.markdown("---")
     st.caption("The numbers behind every claim are in 🔬 Evidence; the decision "
                "trail behind every number is in 🧠 Reasoning.")
 
@@ -630,6 +782,7 @@ def screen_data_features():
     df = _frame(state)
     cm = state.column_map
     st.title("📊 Data & Features")
+    _kpi_strip(st.session_state["state"])
 
     # ---- KPI band ----
     tgt, dcol, idc = cm.get("target_column"), cm.get("date_column"), cm.get("id_column")
@@ -689,6 +842,62 @@ def screen_data_features():
         else:
             st.success("No missing values detected.")
 
+    # ---- filters + deeper EDA (sub-tabs) ----
+    tgt2, dcol2, idc2 = cm.get("target_column"), cm.get("date_column"), cm.get("id_column")
+    fcols = [c for c in df.columns
+             if df[c].dtype == object and 2 <= df[c].nunique() <= 15][:2]
+    fdf = df
+    if fcols:
+        fc1 = st.columns(len(fcols) + 1)
+        for i, c in enumerate(fcols):
+            v = fc1[i].selectbox(f"Filter · {c}", ["(all)"] + sorted(
+                df[c].dropna().unique().astype(str).tolist()), key=f"flt_{c}")
+            if v != "(all)":
+                fdf = fdf[fdf[c].astype(str) == v]
+        fc1[-1].metric("Rows in view", f"{len(fdf):,}")
+
+    t1, t2, t3 = st.tabs(["📈 Distribution", "🔗 Correlations", "👑 Concentration"])
+    with t1:
+        if tgt2 in fdf.columns and HAS_PLOTLY:
+            cA2, cB2 = st.columns([3, 2])
+            samp = fdf[tgt2].dropna()
+            samp = samp.sample(min(len(samp), 8000), random_state=0)
+            with cA2:
+                fig = go.Figure(go.Histogram(x=samp, nbinsx=60,
+                                             marker_color=TEAL, opacity=0.85))
+                _show(_layout(fig, height=300, title=f"{tgt2} distribution"))
+            with cB2:
+                stats = fdf[tgt2].describe()
+                st.dataframe(stats.round(2).rename("value"), width='stretch')
+    with t2:
+        nums = [c for c in fdf.columns
+                if pd.api.types.is_numeric_dtype(fdf[c])][:10]
+        if len(nums) >= 2 and HAS_PLOTLY:
+            corr = fdf[nums].corr(numeric_only=True).round(2)
+            fig = go.Figure(go.Heatmap(z=corr.values, x=corr.columns,
+                                       y=corr.columns, zmin=-1, zmax=1,
+                                       colorscale=[[0, RED], [0.5, SURFACE],
+                                                   [1, TEAL]],
+                                       text=corr.values, texttemplate="%{text}"))
+            _show(_layout(fig, height=90 + 34 * len(nums),
+                          title="Correlation (raw numeric columns)"))
+    with t3:
+        if idc2 and idc2 in fdf.columns and tgt2 in fdf.columns:
+            per = fdf.groupby(idc2)[tgt2].sum().sort_values(ascending=False)
+            n10 = max(1, int(len(per) * 0.10))
+            share = per.head(n10).sum() / max(per.sum(), 1)
+            c1c, c2c = st.columns([1, 3])
+            c1c.metric("Top 10% of customers", f"{share:.0%} of revenue",
+                       f"{n10} customers", delta_color="off")
+            if HAS_PLOTLY:
+                cum = (per.cumsum() / per.sum()).reset_index(drop=True)
+                fig = go.Figure(go.Scatter(y=cum.values, mode="lines",
+                                           line=dict(color=AMBER, width=2.4)))
+                fig.update_xaxes(title="customers (ranked)")
+                fig.update_yaxes(title="cumulative revenue share", range=[0, 1.02])
+                with c2c:
+                    _show(_layout(fig, height=280, title="Revenue concentration curve"))
+
     # ---- EDA facts strip ----
     ts = state.eda_report.get("timeseries") or {}
     seas = ts.get("seasonality") or {}
@@ -744,6 +953,7 @@ def screen_evidence():
     state = st.session_state["state"]
     r = state.results
     st.title("🔬 Evidence")
+    _kpi_strip(st.session_state["state"])
 
     # ---- Forecast ----
     from agents import stage_stories as SS
@@ -785,6 +995,16 @@ def screen_evidence():
                   if not m.get("error") and m.get("mape") is not None]
             bad = [m for m in fc.get("metrics", [])
                    if m.get("error") or m.get("mape") is None]
+            if ok:
+                st.markdown("#### 🏆 Backtest leaderboard")
+                podium = sorted(ok, key=lambda m: m["mape"])[:3]
+                pcols = st.columns(len(podium))
+                medals = ["🥇", "🥈", "🥉"]
+                for i, m in enumerate(podium):
+                    pcols[i].metric(f"{medals[i]} {m['model']}",
+                                    f"{m['mape']:.2f}% MAPE",
+                                    f"RMSE {m['rmse']:,.0f} · {m['family']}",
+                                    delta_color="off")
             if ok and HAS_PLOTLY:
                 mdf = pd.DataFrame(ok).sort_values("mape")
                 members = (fc["ensemble"]["members"] if fc.get("ensemble")
@@ -859,7 +1079,7 @@ def screen_evidence():
     if an and "error" not in an:
         c = an.get("counts", {})
         with st.expander(f"🚨 Anomalies — {c.get('high', 0)} high / "
-                         f"{c.get('medium', 0)} medium", expanded=True):
+                         f"{c.get('medium', 0)} medium", expanded=False):
             st.markdown("> " + SS.anomaly_story(state))
             heavy = (c.get("high", 0) + c.get("medium", 0)) > 150
             tiers = st.multiselect("Show tiers", ["high", "medium", "review"],
@@ -904,6 +1124,36 @@ def screen_evidence():
                                        "<br>%{text}<extra></extra>"))
                 _show(_layout(fig, height=430,
                               title="Anomaly constellation — dot size = detector votes"))
+            # --- account drill-down: one customer, their line, their anomalies
+            ents = [f.get("entity") for f in an.get("flagged", [])
+                    if f.get("entity")]
+            if ents:
+                from collections import Counter
+                top_ents = [e for e, _ in Counter(ents).most_common(25)]
+                pick_ent = st.selectbox("🔎 Drill into an account", top_ents,
+                                        key="drill_ent")
+                cm = state.column_map
+                df_all = _frame(state)
+                if cm.get("id_column") in df_all.columns and HAS_PLOTLY:
+                    sub = df_all[df_all[cm["id_column"]].astype(str) == pick_ent]
+                    dts = pd.to_datetime(sub[cm["date_column"]], errors="coerce")
+                    figd = go.Figure()
+                    figd.add_scatter(x=dts, y=sub[cm["target_column"]],
+                                     mode="lines", name="billed",
+                                     line=dict(color=SLATE, width=1.6))
+                    apts = [f for f in an.get("flagged", [])
+                            if f.get("entity") == pick_ent]
+                    if apts:
+                        av = pd.DataFrame(apts)
+                        av["date"] = pd.to_datetime(av["date"], errors="coerce")
+                        figd.add_scatter(
+                            x=av["date"], y=av[cm["target_column"]],
+                            mode="markers", name="anomalies",
+                            marker=dict(color=[TIER_COLORS.get(t, RED)
+                                               for t in av["tier"]],
+                                        size=9 + av["votes"] * 2))
+                    _show(_layout(figd, height=300,
+                                  title=f"{pick_ent} — billing with anomalies"))
             if rows:
                 adf2 = pd.DataFrame(rows)
                 adf2["attribution"] = adf2["attribution"].apply(
@@ -972,6 +1222,35 @@ def screen_evidence():
     if sg and "error" not in sg:
         with st.expander(f"👥 Segments — k={sg.get('k')}", expanded=False):
             st.markdown("> " + SS.segment_story(state))
+            profs0 = sg.get("profiles", [])
+            if profs0:
+                pc = st.columns(min(len(profs0), 4))
+                total_m = sum(p0.get("rfm_monetary", 0) * p0.get("size", 0)
+                              for p0 in profs0) or 1
+                for i, p0 in enumerate(profs0[:4]):
+                    share = (p0.get("rfm_monetary", 0) * p0.get("size", 0)) / total_m
+                    pc[i].metric(f"S{p0.get('segment_id')} · {p0.get('persona', '?')}",
+                                 f"{p0.get('size', 0)} customers",
+                                 f"{share:.0%} of revenue · recency "
+                                 f"{p0.get('rfm_recency_days', 0):.0f}d",
+                                 delta_color="off")
+            # segment × leakage overlap — two capabilities, one insight
+            lk2 = r.get("leakage", {})
+            cand2 = pd.DataFrame(lk2.get("candidates", []))
+            assign = sg.get("entity_segments") or {}
+            if not cand2.empty and "entity" in cand2.columns and assign:
+                cand2["segment"] = cand2["entity"].map(
+                    lambda e: assign.get(str(e)))
+                ov = cand2.dropna(subset=["segment"])                     .groupby("segment")["impact_estimate"].sum()                     .sort_values(ascending=False)
+                if len(ov):
+                    top_s = ov.index[0]
+                    persona = next((p0.get("persona", "?") for p0 in profs0
+                                    if str(p0.get("segment_id")) == str(int(top_s))
+                                    ), "?")
+                    st.info(f"🔗 **Cross-capability insight:** segment "
+                            f"S{int(top_s)} ('{persona}') holds "
+                            f"**{ov.iloc[0] / max(ov.sum(), 1):.0%} of the "
+                            f"leakage** ({ov.iloc[0]:,.0f}).")
             profs = pd.DataFrame(sg.get("profiles", []))
             if not profs.empty and HAS_PLOTLY:
                 palette = [TEAL, AMBER, RED, SLATE, "#7C6BD9", "#4E9AD6"]
@@ -1035,16 +1314,23 @@ def screen_reasoning():
         return
     state = st.session_state["state"]
     st.title("🧠 Reasoning ledger")
+    _kpi_strip(st.session_state["state"])
     st.caption("Append-only. Every decision, its reasoning, its evidence, and "
                "which engine made it. ⚙️ deterministic · 🤖 LLM · 🧑 human.")
+    st.toggle("Show model detail", value=False, key="show_models",
+              help="Off: business view (AI / rules / human). On: exact model names.")
     agents = sorted({e.agent for e in state.ledger.entries})
-    pick = st.multiselect("Filter by engine", agents, default=agents, key="agent_filter")
+    if st.session_state.get("show_models"):
+        pick = st.multiselect("Filter by engine", agents, default=agents,
+                              key="agent_filter")
+    else:
+        pick = agents
     n_llm = sum(1 for e in state.ledger.entries
                 if e.agent not in ("deterministic", "human"))
     n_h = sum(1 for e in state.ledger.entries if e.agent == "human")
     st.markdown(f"**{len(state.ledger.entries)} decisions** — "
-                f"🤖 {n_llm} LLM · ⚙️ {len(state.ledger.entries) - n_llm - n_h} "
-                f"deterministic · 🧑 {n_h} human")
+                f"🤖 {n_llm} AI · ⚙️ {len(state.ledger.entries) - n_llm - n_h} "
+                f"rules-verified · 🧑 {n_h} human")
     for e in state.ledger.entries:
         if e.agent in pick:
             st.markdown(_entry_md(e), unsafe_allow_html=True)
@@ -1102,6 +1388,7 @@ def screen_export():
 # ================================================================== SIDEBAR
 with st.sidebar:
     st.title("🧭 Revenue Reasoning Agent")
+    st.caption("Built by **Arun Chinega** · AI Centre of Excellence")
     nav = st.radio("Screens", SCREENS, key="nav", label_visibility="collapsed")
     st.markdown("---")
 
@@ -1162,6 +1449,7 @@ with st.sidebar:
                 st.rerun()
         if run_btn and up is not None:
             st.session_state.pop("state", None)
+            st.session_state["spoken_once"] = set()
             st.session_state["phase"] = "perceive"
         if _phase() in ("confirm", "done"):
             if st.button("↺ New run", key="newrun", width='stretch'):

@@ -71,12 +71,38 @@ def _rule_duplicate_billing(df, cm, roles):
     return dup, impact, "duplicate (entity, date, amount) billing row"
 
 
+def _rule_excessive_discount(df, cm, roles):
+    """Discounts far beyond the business's own norm — abuse, not promotion.
+    Threshold: p99 of observed discounts, floored at 45%. Impact = revenue
+    given away beyond the median discount level."""
+    import pandas as pd
+    target = cm["target_column"]
+    disc_col = next((c for c in df.columns
+                     if "discount" in c.lower()
+                     and pd.api.types.is_numeric_dtype(df[c])), None)
+    if disc_col is None:
+        return None
+    d = df[disc_col].fillna(0)
+    if (d > 0).sum() < 10:
+        return None
+    thresh = max(45.0, float(d[d > 0].quantile(0.99)))
+    mask = d > thresh
+    if not mask.any():
+        return mask, d.where(mask, 0.0) * 0.0, f"no discount above {thresh:.0f}%"
+    med = float(d[(d > 0) & ~mask].median() or 0.0)
+    base = df[target] / (1 - d / 100).clip(lower=0.05)
+    impact = (base * (d - med) / 100).where(mask, 0.0).clip(lower=0)
+    return mask, impact, (f"discount above {thresh:.0f}% (norm median {med:.0f}%) — "
+                          f"revenue given away beyond policy")
+
+
 _RULES = {
     "billed_vs_expected_delta": _rule_billed_vs_expected_delta,
     "zero_billed_with_usage": _rule_zero_billed_with_usage,
     "tariff_misapplication": _rule_tariff_misapplication,
     "unbilled_usage": _rule_zero_billed_with_usage,      # alias — same fn, deduped
     "duplicate_billing": _rule_duplicate_billing,
+    "excessive_discount": _rule_excessive_discount,
     # insurance/banking rules reuse the generic mechanics for POC:
     "premium_vs_policy_delta": _rule_billed_vs_expected_delta,
     "duplicate_claims": _rule_duplicate_billing,
@@ -90,7 +116,8 @@ def run_leakage_capability(state: RunState) -> dict:
     cm = state.column_map
     roles = (state.feature_report or {}).get("detected_roles", {})
     active_rules = (state.domain.get("profile") or {}).get(
-        "leakage_rules", ["billed_vs_expected_delta", "zero_billed_with_usage"])
+        "leakage_rules", ["billed_vs_expected_delta", "zero_billed_with_usage",
+                          "excessive_discount", "duplicate_billing"])
 
     # statistical layer: reuse anomaly votes if present
     anomaly_votes: dict[int, int] = {}

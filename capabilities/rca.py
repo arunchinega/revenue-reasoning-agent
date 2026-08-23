@@ -13,7 +13,7 @@ import json
 import numpy as np
 import pandas as pd
 
-from core.llm import call_json
+from core.llm import MODELS, as_text, as_float, as_str_list, call_json
 from core.state import RunState
 
 
@@ -125,7 +125,7 @@ def run_rca_capability(state: RunState, use_llm: bool = True,
             fallback=_fallback,
         )
         parsed = llm.parsed
-        agent = "deterministic" if llm.used_fallback else "llama-3.1-8b"
+        agent = "deterministic" if llm.used_fallback else MODELS["reasoner"]
     else:
         parsed = _fallback()
         agent = "deterministic"
@@ -137,7 +137,7 @@ def run_rca_capability(state: RunState, use_llm: bool = True,
         decision=f"{len(out['hypotheses'])} ranked hypothesis(es) for "
                  f"{evidence['focus_window']['start']}→{evidence['focus_window']['end']} "
                  f"(delta {drop:,.0f})",
-        reasoning=parsed.get("reasoning", "")
+        reasoning=as_text(parsed.get("reasoning", ""))
                   or "; ".join(h["hypothesis"] for h in out["hypotheses"][:2]),
         evidence=["rca.decomposition", "anomaly.flagged"],
         confidence=max((h.get("confidence", 0) for h in out["hypotheses"]), default=None),

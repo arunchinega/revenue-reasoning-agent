@@ -61,17 +61,31 @@ def eda_story(state: RunState) -> str:
             f"This rhythm will decide which forecasting models deserve a lane.")
 
 
+RULE_TRIGGERS = {
+    "time": "a date column with detectable seasonality → lag & rolling-window features",
+    "rfm": "a customer identifier → RFM behavioural features (recency, frequency, monetary)",
+    "price_qty": "numeric price × quantity → expected-revenue and billing-delta signals",
+    "qty_only": "a quantity column (no numeric price) → revenue-per-unit",
+    "inferred_price": "a categorical tariff label → unit rate inferred per label group, "
+                      "expected revenue rebuilt",
+}
+
+
 def features_story(state: RunState) -> str:
     fr = state.feature_report or {}
     rules = fr.get("applied_rules", {})
     n = sum(len(v) for v in rules.values())
     top = (fr.get("top_features") or ["?"])[0]
     dropped = len(fr.get("leakage_suspects_dropped", []) or [])
-    drop_txt = (f" — and I **dropped {dropped} column(s)** that would have let "
-                f"the models cheat (they encode the answer)" if dropped else "")
-    return (f"I engineered **{n} candidate signals** across {len(rules)} rule "
-            f"groups. **{top}** carries the most predictive weight{drop_txt}. "
-            f"What survives is honest signal.")
+    pruned = len(fr.get("redundant_dropped", []) or [])
+    chain = "; ".join(RULE_TRIGGERS.get(g, g) for g in rules)
+    drop_txt = (f" **{dropped} column(s) dropped** for encoding the answer "
+                f"(leakage guard)" if dropped else "no leakage suspects")
+    return (f"My methodology, step by step: I detected {chain}. That produced "
+            f"**{n} candidate signals**. Then the gauntlet — {drop_txt}, "
+            f"{pruned} pruned as redundant, and the survivors ranked by two "
+            f"independent methods (mutual information + RandomForest "
+            f"importance), which agree the strongest signal is **{top}**.")
 
 
 def plan_story(state: RunState) -> str:

@@ -6,7 +6,7 @@ confidence score; low confidence → HITL confirm panel (HITL point #1).
 """
 from __future__ import annotations
 
-from core.llm import call_json
+from core.llm import MODELS, as_text, as_float, as_str_list, call_json
 from core.state import RunState
 from stages.domain_detect import assemble_context
 
@@ -82,8 +82,8 @@ def run_column_mapping(state: RunState, use_llm: bool = True) -> RunState:
                 "target_column": parsed["target_column"],
                 "id_column": parsed.get("id_column") if parsed.get("id_column") in cols else heur["id_column"],
                 "feature_columns": [c for c in parsed.get("feature_columns", []) if c in cols] or heur["feature_columns"],
-                "confidence": float(parsed.get("confidence", heur["confidence"])),
-                "reasoning": parsed.get("reasoning", heur["reasoning"]),
+                "confidence": as_float(parsed.get("confidence"), heur["confidence"]),
+                "reasoning": as_text(parsed.get("reasoning", heur["reasoning"])),
                 "method": "heuristic_fallback" if llm.used_fallback else "llm",
             }
 
@@ -91,7 +91,7 @@ def run_column_mapping(state: RunState, use_llm: bool = True) -> RunState:
     hitl = result["confidence"] < HITL_THRESHOLD
     state.ledger.log(
         stage="column_mapping",
-        agent="deterministic" if result["method"].startswith("heuristic") else "llama-3.1-8b",
+        agent="deterministic" if result["method"].startswith("heuristic") else MODELS["reasoner"],
         decision=(
             f"date={result['date_column']}, target={result['target_column']}, "
             f"id={result['id_column']}, {len(result['feature_columns'])} feature col(s)"

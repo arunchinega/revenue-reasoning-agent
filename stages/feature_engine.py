@@ -64,6 +64,13 @@ def _price_qty_features(df: pd.DataFrame, price_col: str, qty_col: str,
     df["revenue_per_unit"] = df[target_col] / df[qty_col].replace(0, pd.NA)
     applied.append("revenue_per_unit")
     df["expected_revenue"] = df[price_col] * df[qty_col]
+    disc_col = next((c for c in df.columns
+                     if "discount" in c.lower()
+                     and pd.api.types.is_numeric_dtype(df[c])), None)
+    if disc_col is not None:
+        # a legitimate discount is not leakage — expected revenue honours it;
+        # ABUSIVE discounts are caught by the leakage rule layer instead
+        df["expected_revenue"] = df["expected_revenue"] * (1 - df[disc_col].fillna(0) / 100)
     df["billed_vs_expected_delta"] = df[target_col] - df["expected_revenue"]
     applied += ["expected_revenue", "billed_vs_expected_delta"]  # leakage signal
     return df, applied
