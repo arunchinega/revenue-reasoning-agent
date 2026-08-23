@@ -180,6 +180,12 @@ def _phase() -> str:
 def _start_worker(target, *args) -> None:
     import threading
     t = threading.Thread(target=target, args=args, daemon=True)
+    try:  # make the thread's session_state writes visible to the page (1.5x fix)
+        from streamlit.runtime.scriptrunner import (add_script_run_ctx,
+                                                    get_script_run_ctx)
+        add_script_run_ctx(t, get_script_run_ctx())
+    except Exception:  # noqa: BLE001
+        pass
     st.session_state["worker"] = t
     st.session_state["worker_error"] = None
     t.start()
@@ -242,8 +248,8 @@ def screen_run(up, readme_up, nl, use_llm):
             st.stop()
         st.subheader("🔎 Perception — the agent is reading your data")
 
-        if st.session_state.get("sync_run"):
-            # test / fallback path: synchronous (original behaviour)
+        if not st.session_state.get("async_mode"):
+            # DEFAULT: synchronous — battle-tested; cards + voice stream progressively
             box = st.container()
             try:
                 with st.spinner("Profiling…"):
@@ -315,7 +321,12 @@ def screen_run(up, readme_up, nl, use_llm):
                         st.session_state.pop(k, None)
                     st.error(err)
                     st.rerun()
-                if st.session_state.get("state") is not None and not _worker_alive():
+                _final = st.session_state.get("state")
+                if _final is None and not _worker_alive() and \
+                        st.session_state.get("state_live") is not None:
+                    st.session_state["state"] = st.session_state["state_live"]
+                    _final = st.session_state["state"]
+                if _final is not None and not _worker_alive():
                     st.session_state["worker"] = None
                     st.session_state["phase"] = "confirm"
                     st.session_state["journey_told"] = False
@@ -452,7 +463,7 @@ def screen_run(up, readme_up, nl, use_llm):
                         script=speak_fn(st_state) if speak and speak_fn else None,
                         stage_key=intent)
 
-        if st.session_state.get("sync_run"):
+        if not st.session_state.get("async_mode"):
             try:
                 with st.spinner("Planner → Executor → Critic at work…"):
                     run_capabilities(state, use_llm=use_llm,
@@ -1104,6 +1115,9 @@ with st.sidebar:
         set_reasoner("llama3.2:3b" if speed.startswith("⚡") else "llama3.1:8b")
         st.toggle("🔊 Narrate the run", value=False, key="voice_on",
                   help="Browser voice gives a running commentary (demo mode).")
+        st.toggle("⚡ Experimental async engine", value=False, key="async_mode",
+                  help="Parallel capabilities + live progress bar. Default off: "
+                       "the synchronous engine is the battle-tested path.")
         if st.session_state.get("voice_on"):
             st.selectbox("Voice", ["Female", "Male",
                                    "Duet (Narrator + Critic)", "Auto"],
