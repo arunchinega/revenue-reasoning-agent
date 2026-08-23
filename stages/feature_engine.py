@@ -111,7 +111,7 @@ def run_feature_engineering(state: RunState) -> RunState:
         evidence.append("eda.categorical(id column present)")
 
     price_col = _find_col(cols, "price", "rate", "tariff", "unit_cost", numeric_in=df)
-    qty_col = _find_col(cols, "qty", "quantity", "units", "volume", "kwh", "usage",
+    qty_col = _find_col(cols, "qty", "quantity", "units", "volume", "kwh", "usage", "txn_amount", "transaction",
                         "consumption", numeric_in=df)
     if price_col and qty_col and target and price_col != target and qty_col != target:
         try:
@@ -130,7 +130,7 @@ def run_feature_engineering(state: RunState) -> RunState:
             # No numeric price, but a categorical tariff/plan label? Infer the
             # unit rate per label (median revenue_per_unit of normal rows) and
             # rebuild the expected-revenue leakage signal from it.
-            label_col = _find_col(cols, "tariff", "plan", "rate", "price_code",
+            label_col = _find_col(cols, "tariff", "plan", "rate", "price_code", "product",
                                   "product_code")
             if (label_col and not pd.api.types.is_numeric_dtype(df[label_col])
                     and df[label_col].nunique() <= max(20, int(len(df) ** 0.5))):

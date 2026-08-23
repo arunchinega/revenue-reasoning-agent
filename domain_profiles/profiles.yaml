@@ -27,7 +27,7 @@ banking:
     leakage: [fee slippage, waiver abuse, fee leakage, uncollected fees]
     anomaly: [transaction anomalies, unusual activity]
     forecasting: [fee income forecast, revenue projection]
-  leakage_rules: [fee_schedule_mismatch, excess_waivers, zero_billed_with_usage, billed_vs_expected_delta, duplicate_billing]
+  leakage_rules: [excess_waivers, zero_billed_with_usage, duplicate_billing]
 
 ecommerce:
   display: "E-commerce orders"

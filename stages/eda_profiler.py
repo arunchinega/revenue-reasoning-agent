@@ -176,13 +176,32 @@ def _timeseries_diagnostics(df: pd.DataFrame, date_col: str, target_col: str) ->
 
 
 def _guess_target(df: pd.DataFrame, numeric_cols: list[str]) -> str | None:
-    """Heuristic pre-guess of the revenue/target column (Stage 2.5 refines it)."""
-    priority = ("revenue", "amount", "sales", "billed", "total", "value", "price", "charge")
-    lowered = {c.lower(): c for c in numeric_cols}
-    for key in priority:
-        for low, orig in lowered.items():
-            if key in low:
-                return orig
+    """Heuristic pre-guess of the revenue/target column (Stage 2.5 refines it).
+    Scored, not first-match: money-earned words beat generic 'amount', and
+    usage-flavoured tokens (txn/usage/consumed/qty) are penalised so e.g.
+    fee_amount beats txn_amount in banking data."""
+    STRONG = ("revenue", "billed", "fee", "sales", "charge", "premium", "price_total")
+    WEAK = ("amount", "total", "value")
+    USAGE = ("txn", "transaction", "usage", "consumed", "kwh", "units", "qty",
+             "quantity", "volume", "count", "sessions", "minutes", "price",
+             "rate", "pct", "percent")
+    best, best_score = None, 0
+    for c in numeric_cols:
+        low = c.lower()
+        score = 0
+        if any(k in low for k in STRONG):
+            score += 3
+        if any(k in low for k in WEAK):
+            score += 1
+        if any(k in low for k in USAGE):
+            score -= 2
+        if any(k in low for k in ("shipping", "tax", "gst", "vat", "refund",
+                                  "cashback", "cost", "expense")):
+            score -= 3
+        if score > best_score:
+            best, best_score = c, score
+    if best is not None:
+        return best
     # fallback: numeric col with highest variance (excluding likely IDs)
     best, best_var = None, -1.0
     for col in numeric_cols:

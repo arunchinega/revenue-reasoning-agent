@@ -135,6 +135,10 @@ def _speak(text: str, speaker: str | None = None) -> None:
     even while cards keep appearing."""
     if not st.session_state.get("voice_on"):
         return
+    # ALL speech is deferred to the finale — no live speech engine activity
+    # during the run in any phase (the faint window is architecture'd away)
+    st.session_state.setdefault("speech_batch", []).append((text, speaker))
+    return
     import json as _json
     import streamlit.components.v1 as components
     pref = st.session_state.get("voice_pref", "Female")
@@ -158,6 +162,44 @@ def _speak(text: str, speaker: str | None = None) -> None:
         "u.rate=1.0;u.pitch=1.0;"
         "const go=()=>{const v=pick();if(v)u.voice=v;"
         "window.speechSynthesis.speak(u);};"
+        "if(window.speechSynthesis.getVoices().length)go();"
+        "else window.speechSynthesis.onvoiceschanged=()=>{go();"
+        "window.speechSynthesis.onvoiceschanged=null;};"
+        "}catch(e){}})();</script>", height=0)
+
+
+def _flush_speech() -> None:
+    """Speak everything deferred during execution in ONE component —
+    no iframe bursts while the renderer is under load (the faint fix)."""
+    batch = st.session_state.pop("speech_batch", [])
+    if not batch or not st.session_state.get("voice_on"):
+        return
+    import json as _json
+    import streamlit.components.v1 as components
+    pref = st.session_state.get("voice_pref", "Female")
+    items = []
+    for text, speaker in batch:
+        if pref == "Duet" and speaker:
+            hints = MALE_HINTS if speaker == "critic" else FEMALE_HINTS
+        else:
+            hints = (FEMALE_HINTS if pref in ("Female", "Duet")
+                     else MALE_HINTS if pref == "Male" else [])
+        clean = (text.replace("**", "").replace("`", "").replace("#", "")
+                 .replace("→", " to ").replace("Δ", "delta "))
+        items.append({"t": clean, "h": hints})
+    components.html(
+        "<script>(function(){try{"
+        f"const ITEMS={_json.dumps(items)};"
+        "function pick(h){const vs=window.speechSynthesis.getVoices();"
+        "if(!vs.length)return null;"
+        "const en=vs.filter(v=>v.lang&&v.lang.toLowerCase().startsWith('en'));"
+        "const pool=en.length?en:vs;"
+        "for(const k of h){const m=pool.find(v=>v.name.toLowerCase()"
+        ".includes(k));if(m)return m;}return pool[0];}"
+        "function go(){for(const it of ITEMS){"
+        "const u=new SpeechSynthesisUtterance(it.t);u.rate=1.0;"
+        "const v=pick(it.h);if(v)u.voice=v;"
+        "window.speechSynthesis.speak(u);}}"
         "if(window.speechSynthesis.getVoices().length)go();"
         "else window.speechSynthesis.onvoiceschanged=()=>{go();"
         "window.speechSynthesis.onvoiceschanged=null;};"
@@ -553,6 +595,7 @@ def screen_run(up, readme_up, nl, use_llm):
                         stage_key=intent)
 
         if not st.session_state.get("async_mode"):
+            st.session_state["defer_speech"] = True
             try:
                 with st.spinner("Planner → Executor → Critic at work…"):
                     run_capabilities(state, use_llm=use_llm,
@@ -619,6 +662,7 @@ def screen_run(up, readme_up, nl, use_llm):
             st.stop()
 
     if _phase() == "done":
+        st.session_state["defer_speech"] = False
         from agents import stage_stories as SS
         r0 = state.results
         lk0 = r0.get("leakage", {})
@@ -629,8 +673,27 @@ def screen_run(up, readme_up, nl, use_llm):
                 f"<div style='font-size:96px;font-weight:800;color:{AMBER};line-height:1.05'>"
                 f"{lk0['total_impact_estimate']:,.0f}</div></div>",
                 unsafe_allow_html=True)
-            _speak(SS.SPEAK["hero"](state))
+            st.session_state.setdefault("speech_batch", []).append(
+                (SS.SPEAK["hero"](state), "narrator"))
         _story_card("📜", "The audit trail", SS.narration_story(state), speak=False)
+        if not st.session_state.get("hero_spoken"):
+            st.session_state["hero_spoken"] = True
+            batch = list(st.session_state.get("speech_batch", []))
+            if batch and st.session_state.get("voice_on"):
+                if str(st.session_state.get("voice_engine", "🖥")).startswith("🖥"):
+                    from agents.voicebox import synth_narration
+                    with st.spinner("🎙 Rendering narration…"):
+                        wav = synth_narration(
+                            batch,
+                            duet=st.session_state.get("voice_pref") == "Duet")
+                    if wav:
+                        st.session_state["speech_batch"] = []
+                        st.audio(wav, format="audio/wav", autoplay=True)
+                        st.caption("🎙 Narration (server-rendered)")
+                    else:
+                        _flush_speech()
+                else:
+                    _flush_speech()
         st.success("✅ Analysis complete — open **📖 Findings** in the sidebar "
                    "for the story, **🔬 Evidence** for the charts, and "
                    "**🧠 Reasoning** for every decision the agent made.")
@@ -1427,6 +1490,10 @@ with st.sidebar:
                   help="Parallel capabilities + live progress bar. Default off: "
                        "the synchronous engine is the battle-tested path.")
         if st.session_state.get("voice_on"):
+            st.radio("Voice engine", ["🖥 Server (recommended)", "🌐 Browser"],
+                     index=0, key="voice_engine", horizontal=True,
+                     help="Server: Windows voices rendered to audio — the "
+                          "browser speech engine is never used.")
             st.selectbox("Voice", ["Female", "Male",
                                    "Duet (Narrator + Critic)", "Auto"],
                          index=0, key="voice_pref",
@@ -1450,6 +1517,8 @@ with st.sidebar:
         if run_btn and up is not None:
             st.session_state.pop("state", None)
             st.session_state["spoken_once"] = set()
+            st.session_state["speech_batch"] = []
+            st.session_state["hero_spoken"] = False
             st.session_state["phase"] = "perceive"
         if _phase() in ("confirm", "done"):
             if st.button("↺ New run", key="newrun", width='stretch'):

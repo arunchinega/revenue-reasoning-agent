@@ -25,3 +25,4 @@ plotly>=5
 python-pptx
 python-docx
 matplotlib
+pyttsx3
