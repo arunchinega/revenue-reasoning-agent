@@ -458,7 +458,8 @@ def screen_run(up, readme_up, nl, use_llm):
                         script=SS.SPEAK["ingest"](state), stage_key="ingest")
             _story_card("🔎", "Profiling (EDA)", SS.eda_story(state),
                         script=SS.SPEAK["eda"](state), stage_key="eda")
-            series = _daily_series(state)
+            series = _daily_series(state) if not st.session_state.get(
+                "light_journey", True) else None
             if series is not None and HAS_PLOTLY:
                 cA, cB = st.columns([3, 2])
                 with cA:
@@ -475,7 +476,8 @@ def screen_run(up, readme_up, nl, use_llm):
             _story_card("🧬", "Feature engineering", SS.features_story(state),
                         script=SS.SPEAK["features"](state), stage_key="features")
             fr = state.feature_report or {}
-            imp = fr.get("importance")
+            imp = None if st.session_state.get("light_journey", True) \
+                else fr.get("importance")
             if imp and HAS_PLOTLY:
                 rows_i = [{"feature": k,
                            "importance": (v.get("rf_importance", 0)
@@ -675,6 +677,22 @@ def screen_run(up, readme_up, nl, use_llm):
         if not st.session_state.get("hero_spoken"):
             st.session_state["hero_spoken"] = True
             batch = list(st.session_state.get("speech_batch", []))
+            if not batch and st.session_state.get("voice_on"):
+                # session was refreshed (F5+Resume) — rebuild from results
+                order = ["ingest", "eda", "features", "forecasting", "anomaly",
+                         "leakage", "rca", "segment", "whatif", "recommend",
+                         "hero"]
+                from agents.stage_stories import DUET_SPEAKER
+                for k in order:
+                    fn = SS.SPEAK.get(k)
+                    if fn is None:
+                        continue
+                    if k in ("ingest", "eda", "features", "hero") or \
+                            k in (state.results or {}):
+                        try:
+                            batch.append((fn(state), DUET_SPEAKER.get(k)))
+                        except Exception:  # noqa: BLE001
+                            pass
             if batch and st.session_state.get("voice_on"):
                 if str(st.session_state.get("voice_engine", "🖥")).startswith("🖥"):
                     from agents.voicebox import synth_narration
@@ -1486,6 +1504,8 @@ with st.sidebar:
         set_reasoner("llama3.2:3b" if speed.startswith("⚡") else "llama3.1:8b")
         st.toggle("🔊 Narrate the run", value=False, key="voice_on",
                   help="Browser voice gives a running commentary (demo mode).")
+        st.toggle("🪶 Light journey (text cards, charts stay on Data & "
+                  "Features)", value=True, key="light_journey")
         st.toggle("⚡ Experimental async engine", value=False, key="async_mode",
                   help="Parallel capabilities + live progress bar. Default off: "
                        "the synchronous engine is the battle-tested path.")
