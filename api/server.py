@@ -56,7 +56,7 @@ def _clip_worker():
                 f"Path({str(tmp / 'o.wav')!r}).write_bytes(w or b'')",
             ]
             script.write_text("\n".join(lines), encoding="utf-8")
-            subprocess.run([_sys.executable, str(script)], timeout=90,
+            subprocess.run([_sys.executable, str(script)], timeout=150,
                            capture_output=True)
             wav = tmp / "o.wav"
             if wav.exists() and wav.stat().st_size > 1000:
@@ -73,7 +73,14 @@ threading.Thread(target=_clip_worker, daemon=True).start()
 
 
 def _say(text, speaker="narrator"):
-    RUN["clip_q"].append((text, speaker))
+    text = (text or "").strip()
+    while len(text) > 420:                       # long stories → chained clips
+        cut = text.rfind(". ", 0, 420)
+        cut = cut + 1 if cut > 100 else 420
+        RUN["clip_q"].append((text[:cut].strip(), speaker))
+        text = text[cut:].strip()
+    if text:
+        RUN["clip_q"].append((text, speaker))
 
 
 def _ledger(state):
@@ -163,6 +170,12 @@ def status():
         out["columns"] = st.column_map
         if RUN["phase"] == "confirm":
             out["plan_story"] = SS.plan_story(st)
+            try:
+                out["journey"] = {"ingest": SS.SPEAK["ingest"](st),
+                                  "eda": SS.SPEAK["eda"](st),
+                                  "features": SS.SPEAK["features"](st)}
+            except Exception:  # noqa: BLE001
+                pass
         if RUN["phase"] == "done":
             r = st.results
             lk = r.get("leakage", {})
@@ -203,6 +216,14 @@ def status():
             except Exception as e:  # noqa: BLE001
                 print(f"[charts] anoms: {e}", flush=True)
             try:
+                cand = (lk.get("candidates") or [])
+                top = sorted(cand, key=lambda c: -(c.get("impact_estimate") or 0))[:10]
+                out["top_leaks"] = [{"e": c.get("entity"), "r": c.get("rule") or c.get("rule_name") or c.get("source_rule") or "—",
+                                     "i": round(c.get("impact_estimate") or 0)}
+                                    for c in top]
+            except Exception as e:  # noqa: BLE001
+                print(f"[charts] leaks: {e}", flush=True)
+            try:
                 out["bakeoff"] = [{"m": m["model"], "mape": round(float(m["mape"]), 2)}
                                   for m in (fc.get("metrics") or [])
                                   if m.get("mape") is not None]
@@ -229,6 +250,49 @@ def clip(i: int):
 def chartjs():
     return Response((Path(__file__).parent.parent / "web" / "chart.js")
                     .read_bytes(), media_type="application/javascript")
+
+
+@app.get("/api/ask")
+def ask(q: int = 0):
+    st = RUN["state"]
+    if st is None or RUN["phase"] != "done":
+        return JSONResponse({"a": "Run an analysis first."})
+    r = st.results
+    lk = r.get("leakage", {})
+    fc = r.get("forecasting", {})
+    cand = lk.get("candidates") or []
+    a = "I don't have that computed."
+    try:
+        if q == 0 and cand:
+            import collections
+            agg = collections.Counter()
+            for c in cand:
+                agg[c.get("entity")] += c.get("impact_estimate") or 0
+            top = agg.most_common(3)
+            a = ("Largest leakage by account: "
+                 + "; ".join(f"{e} ({v:,.0f})" for e, v in top)
+                 + f". Total estimated: {lk.get('total_impact_estimate', 0):,.0f}.")
+        elif q == 1:
+            from agents.stage_stories import verdict_story
+            a = verdict_story(st).replace("**", "")
+        elif q == 2:
+            from agents.stage_stories import rca_story
+            a = rca_story(st).replace("**", "")
+        elif q == 3 and cand:
+            import collections
+            agg = collections.Counter()
+            for c in cand:
+                agg[c.get("rule") or c.get("rule_name") or c.get("source_rule") or "unattributed"] += c.get("impact_estimate") or 0
+            a = ("Leakage by rule: "
+                 + "; ".join(f"{k} ({v:,.0f})" for k, v in agg.most_common()))
+        elif q == 4:
+            recs = (r.get("recommend", {}) or {}).get("recommendations", [])
+            a = ("First move: " + recs[0].get("action", "")) if recs \
+                else "No recommendations this run."
+    except Exception as e:  # noqa: BLE001
+        a = f"Could not compute: {e}"
+    _say(a)
+    return JSONResponse({"a": a})
 
 
 @app.get("/api/report")

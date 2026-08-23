@@ -33,6 +33,7 @@ button:disabled{opacity:.5}input,textarea{width:100%;background:#0f141a;color:va
     <div id="clock" style="color:var(--mut);font-size:13px"></div></div>
   <style>@keyframes pp{0%{opacity:.25}50%{opacity:1}100%{opacity:.25}}#pulse{animation:pp 1.2s infinite}</style>
   <div id="ledger"></div>
+  <div id="jour" class="grid" style="display:none"></div>
   <div id="plan" style="display:none"><p class="story" id="planstory"></p>
     <button id="approve">✅ Approve plan</button></div>
 </div>
@@ -52,6 +53,15 @@ button:disabled{opacity:.5}input,textarea{width:100%;background:#0f141a;color:va
     <div class="card"><b>📋 Model metrics</b><div id="tmet"></div></div>
     <div class="card"><b>💸 Leakage rules</b><div id="trul"></div></div>
   </div>
+  <div class="card"><b>🔎 Top leakage candidates</b><div id="tlek"></div></div>
+  <div class="card"><b>💬 Ask the agent</b><div style="margin:8px 0">
+    <button class="chip" onclick="ask(0)">Which accounts leak most?</button>
+    <button class="chip" onclick="ask(1)">How confident is the forecast?</button>
+    <button class="chip" onclick="ask(2)">Why did revenue move?</button>
+    <button class="chip" onclick="ask(3)">Which rules caught it?</button>
+    <button class="chip" onclick="ask(4)">What should we do first?</button></div>
+    <div id="ans" class="story" style="color:var(--ink)"></div></div>
+  <style>.chip{background:#0f141a;color:var(--ink);border:1px solid #26313d;font-weight:400;font-size:13px;padding:6px 12px;margin:3px;border-radius:16px}.chip:hover{border-color:var(--amber)}</style>
   <div class="grid" id="stories"></div>
   <div class="card" style="text-align:center"><a href="/api/report" download><button>⬇ Download Word report</button></a></div>
   <div class="card"><b>Executive summary</b><div id="summary" style="white-space:pre-wrap;color:var(--mut);font-size:14px"></div></div>
@@ -84,7 +94,8 @@ async function poll(){try{
   $('pulse').style.background=s.phase==='done'?'var(--teal)':'var(--amber)';
   clipsAvail=s.clips||0;tryPlay();
   $('ledger').innerHTML=(s.ledger||[]).slice(-8).map(e=>`<div class="led"><b>${e.stage}</b> · ${e.agent} — ${e.decision}</div>`).join('');
-  if(s.phase==='confirm'){$('plan').style.display='block';$('planstory').innerHTML=md(s.plan_story||'')}
+  if(s.phase==='confirm'){$('plan').style.display='block';$('planstory').innerHTML=md(s.plan_story||'');
+   if(s.journey){$('jour').style.display='grid';$('jour').innerHTML=Object.entries(s.journey).map(([k,v])=>'<div class="card story"><b>'+k+'</b><br>'+md(v)+'</div>').join('')}}
   else $('plan').style.display='none';
   if(s.phase==='done'){clearInterval(timer);setInterval(()=>{fetch('/api/status').then(r=>r.json()).then(x=>{clipsAvail=x.clips||0;tryPlay()}).catch(()=>{})},2500);$('results').style.display='block';
     $('hero').textContent=s.hero?Number(s.hero).toLocaleString():'—';
@@ -123,5 +134,7 @@ function drawCharts(s){try{
   options:{scales:{x:{type:'category',labels:s.series.dates,ticks:{maxTicksLimit:8}}},
    plugins:{legend:{labels:{boxWidth:12}}}}})}
 }catch(e){console.log('charts',e)}}
+async function ask(q){$('ans').innerHTML='…';const r=await(await fetch('/api/ask?q='+q)).json();
+ $('ans').innerHTML=md(r.a);fetch('/api/status').then(x=>x.json()).then(x=>{clipsAvail=x.clips||0;tryPlay()})}
 function md(t){return (t||'').replace(/\*\*(.+?)\*\*/g,'<b>$1</b>')}
 </script></div></body></html>
