@@ -60,13 +60,17 @@ async function poll(){try{
   $('ledger').innerHTML=(s.ledger||[]).slice(-6).map(e=>`<div class="led"><b>${e.stage}</b> · ${e.agent} — ${e.decision}</div>`).join('');
   if(s.phase==='confirm'){$('plan').style.display='block';$('planstory').innerHTML=md(s.plan_story||'')}
   else $('plan').style.display='none';
-  if(s.phase==='done'){clearInterval(timer);$('results').style.display='block';
+  if(s.phase==='done'){clearInterval(timer);pollAudio();$('results').style.display='block';
     $('hero').textContent=s.hero?Number(s.hero).toLocaleString():'—';
     $('winner').textContent='📈 '+(s.winner||'');$('dom').textContent='🏷 '+(s.domain||'')+' '+Math.round((s.confidence||0)*100)+'%';
     $('stories').innerHTML=Object.entries(s.stories||{}).map(([k,v])=>`<div class="card story"><b>${k}</b><br>${md(v)}</div>`).join('');
     $('summary').textContent=(s.summary||'').replace(/[#*]/g,'');
     $('ledger2').innerHTML=(s.ledger||[]).map(e=>`<div class="led"><b>${e.stage}</b> · ${e.agent} — ${e.decision}</div>`).join('');
-    if(s.has_audio){$('voice').src='/api/audio';$('voice').play().catch(()=>{})}}
+    if(s.has_audio){$('voice').src='/api/audio';$('voice').play().catch(()=>{})}
+    else{let n=0;const at=setInterval(async()=>{n++;const q=await(await fetch('/api/status')).json();
+      if(q.has_audio){clearInterval(at);$('voice').src='/api/audio';$('voice').play().catch(()=>{})}
+      if(n>40)clearInterval(at)},3000)}}
 }catch(e){}}
+let atries=0;async function pollAudio(){try{const s=await(await fetch('/api/status')).json();if(s.has_audio){$('voice').src='/api/audio';$('voice').play().catch(()=>{});return}if(atries++<40)setTimeout(pollAudio,3000)}catch(e){}}
 function md(t){return (t||'').replace(/\*\*(.+?)\*\*/g,'<b>$1</b>')}
 </script></div></body></html>

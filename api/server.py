@@ -62,21 +62,29 @@ def approve():
                   reasoning="approved via web UI", hitl_required=True,
                   hitl_resolution="approved")
 
+    def _voice_job(st):
+        try:
+            import pythoncom  # Windows COM init for SAPI in a thread
+            pythoncom.CoInitialize()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            from agents.voicebox import synth_narration
+            order = ["ingest", "eda", "features", "forecasting", "anomaly",
+                     "leakage", "rca", "segment", "whatif", "recommend", "hero"]
+            items = [(SS.SPEAK[k](st), SS.DUET_SPEAKER.get(k)) for k in order
+                     if k in SS.SPEAK and (k in ("ingest", "eda", "features",
+                                                 "hero") or k in st.results)]
+            RUN["wav"] = synth_narration(items, duet=True)
+        except Exception:  # noqa: BLE001
+            pass
+
     def job():
         try:
             run_capabilities(st, use_llm=RUN["use_llm"])
             RUN["summary"] = run_narration(st, use_llm=RUN["use_llm"])
-            try:
-                from agents.voicebox import synth_narration
-                order = ["ingest", "eda", "features", "forecasting", "anomaly",
-                         "leakage", "rca", "segment", "whatif", "recommend", "hero"]
-                items = [(SS.SPEAK[k](st), SS.DUET_SPEAKER.get(k)) for k in order
-                         if k in SS.SPEAK and (k in ("ingest", "eda", "features",
-                                                     "hero") or k in st.results)]
-                RUN["wav"] = synth_narration(items, duet=True)
-            except Exception:  # noqa: BLE001
-                pass
-            RUN["phase"] = "done"
+            RUN["phase"] = "done"          # results FIRST — never wait on audio
+            threading.Thread(target=_voice_job, args=(st,), daemon=True).start()
         except Exception as e:  # noqa: BLE001
             RUN.update(error=f"{type(e).__name__}: {e}", phase="confirm")
     threading.Thread(target=job, daemon=True).start()
