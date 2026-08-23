@@ -97,20 +97,47 @@ async function poll(){try{
   if(s.phase==='confirm'){$('plan').style.display='block';$('planstory').innerHTML=md(s.plan_story||'');
    if(s.journey){$('jour').style.display='grid';$('jour').innerHTML=Object.entries(s.journey).map(([k,v])=>'<div class="card story"><b>'+k+'</b><br>'+md(v)+'</div>').join('')}}
   else $('plan').style.display='none';
-  if(s.phase==='done'){clearInterval(timer);setInterval(()=>{fetch('/api/status').then(r=>r.json()).then(x=>{clipsAvail=x.clips||0;tryPlay()}).catch(()=>{})},2500);$('results').style.display='block';
+  if(s.phase==='done'){clearInterval(timer);
+    setInterval(()=>{fetch('/api/status').then(r=>r.json()).then(x=>{clipsAvail=x.clips||0;tryPlay()}).catch(()=>{})},2500);
+    $('results').style.display='block';
     $('hero').textContent=s.hero?Number(s.hero).toLocaleString():'—';
     $('winner').textContent='📈 '+(s.winner||'');$('dom').textContent='🏷 '+(s.domain||'')+' '+Math.round((s.confidence||0)*100)+'%';
     $('stories').innerHTML=Object.entries(s.stories||{}).map(([k,v])=>`<div class="card story"><b>${k}</b><br>${md(v)}</div>`).join('');
     $('summary').textContent=(s.summary||'').replace(/[#*]/g,'');
     $('ledger2').innerHTML=(s.ledger||[]).map(e=>`<div class="led"><b>${e.stage}</b> · ${e.agent} — ${e.decision}</div>`).join('');
-    if(s.has_audio){$('voice').src='/api/audio';$('voice').play().catch(()=>{})}
-    else{let n=0;const at=setInterval(async()=>{n++;const q=await(await fetch('/api/status')).json();
-      if(q.has_audio){clearInterval(at);$('voice').src='/api/audio';$('voice').play().catch(()=>{})}
-      if(n>40)clearInterval(at)},3000)}}
+    if(s.bakeoff)$('tmet').innerHTML='<table style="width:100%;font-size:13px;border-collapse:collapse"><tr style="color:var(--mut)"><td>model</td><td style="text-align:right">MAPE %</td></tr>'+[...s.bakeoff].sort((a,b)=>a.mape-b.mape).map(x=>'<tr'+(x.m===s.winner_name?' style="color:var(--teal);font-weight:700"':'')+'><td>'+x.m+'</td><td style="text-align:right">'+x.mape.toFixed(2)+'</td></tr>').join('')+'</table>';
+    if(s.rules)$('trul').innerHTML='<table style="width:100%;font-size:13px;border-collapse:collapse"><tr style="color:var(--mut)"><td>rule</td><td style="text-align:right">hits</td><td style="text-align:right">impact</td></tr>'+s.rules.map(x=>'<tr><td>'+x.rule+'</td><td style="text-align:right">'+x.hits+'</td><td style="text-align:right">'+Number(x.impact).toLocaleString()+'</td></tr>').join('')+'</table>';
+    if(s.top_leaks)$('tlek').innerHTML='<table style="width:100%;font-size:13px;border-collapse:collapse"><tr style="color:var(--mut)"><td>account</td><td>rule</td><td style="text-align:right">impact</td></tr>'+s.top_leaks.map(x=>'<tr><td>'+x.e+'</td><td>'+x.r+'</td><td style="text-align:right">'+Number(x.i).toLocaleString()+'</td></tr>').join('')+'</table>';
+    drawCharts(s);
+    if(s.viz){const map={series:'cfc',bakeoff:'cbk',anoms:'can'};
+      Object.entries(map).forEach(([k,id])=>{const el=$(id);
+        if(!s.viz[k]&&el)el.outerHTML='<div style="color:var(--amber);font-size:13px">⚠ no '+k+' data this run</div>'})}}
 }catch(e){}}
-let atries=0;async function pollAudio(){try{const s=await(await fetch('/api/status')).json();if(s.has_audio){$('voice').src='/api/audio';$('voice').play().catch(()=>{});return}if(atries++<40)setTimeout(pollAudio,3000)}catch(e){}}
 const CC={};function mk(id,cfg){if(CC[id])CC[id].destroy();CC[id]=new Chart($(id),cfg)}
-function drawCharts(s){try{
+function svgLine(el,labels,series,colors){const W=560,H=180,P=28;let all=[];series.forEach(s=>s.forEach(v=>{if(v!=null)all.push(v)}));
+ if(!all.length){el.outerHTML='<div style="color:var(--mut)">no data</div>';return}
+ const mn=Math.min(...all),mx=Math.max(...all),sp=(mx-mn)||1;
+ const X=i=>P+(W-2*P)*i/Math.max(labels.length-1,1),Y=v=>H-P-(H-2*P)*(v-mn)/sp;
+ let out='<svg viewBox="0 0 '+W+' '+H+'" style="width:100%">';
+ series.forEach((s,si)=>{let d='';s.forEach((v,i)=>{if(v==null)return;d+=(d?'L':'M')+X(i).toFixed(1)+' '+Y(v).toFixed(1)+' '});
+  out+='<path d="'+d+'" fill="none" stroke="'+colors[si]+'" stroke-width="2" '+(si>0?'stroke-dasharray="6 4"':'')+'/>'});
+ out+='<text x="'+P+'" y="14" fill="#8fa1b3" font-size="11">'+labels[0]+' → '+labels[labels.length-1]+'</text></svg>';
+ el.outerHTML=out}
+function svgBars(el,labels,vals,hi){const W=560,BH=22,P=4,H=labels.length*(BH+P)+10,mx=Math.max(...vals)||1;
+ let out='<svg viewBox="0 0 '+W+' '+H+'" style="width:100%">';
+ labels.forEach((l,i)=>{const y=i*(BH+P)+5,w=(W-190)*vals[i]/mx;
+  out+='<rect x="180" y="'+y+'" width="'+Math.max(w,2)+'" height="'+BH+'" fill="'+(hi&&l===hi?'#2fbfa8':'#3a4756')+'" rx="4"/>'+
+   '<text x="174" y="'+(y+15)+'" fill="#e8edf2" font-size="11" text-anchor="end">'+l.slice(0,24)+'</text>'+
+   '<text x="'+(186+Math.max(w,2))+'" y="'+(y+15)+'" fill="#8fa1b3" font-size="11">'+vals[i]+'</text>'});
+ out+='</svg>';el.outerHTML=out}
+function drawCharts(s){
+ if(typeof Chart==='undefined'){try{
+  if(s.series){const fD=(s.forecast||[]).map((_,i)=>'f'+i);
+   svgLine($('cfc'),s.series.dates,[s.series.values,Array(Math.max(s.series.values.length-1,0)).fill(null).concat([s.series.values[s.series.values.length-1]]).concat(s.forecast||[])],['#5b6b7c','#2fbfa8'])}
+  if(s.bakeoff){const bs=[...s.bakeoff].sort((a,b)=>a.mape-b.mape);svgBars($('cbk'),bs.map(x=>x.m),bs.map(x=>x.mape),s.winner_name)}
+  if(s.anoms&&s.series)svgLine($('can'),s.series.dates,[s.series.values],['#5b6b7c']);
+ }catch(e){console.log('svg',e)}return}
+ try{
  const G='#26313d',M='#8fa1b3',A='#e9a13b',T='#2fbfa8',R='#d14836',S='#5b6b7c';
  Chart.defaults.color=M;Chart.defaults.borderColor=G;
  if(s.series){const L=s.series.dates,V=s.series.values;

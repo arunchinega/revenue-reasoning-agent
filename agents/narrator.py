@@ -99,8 +99,8 @@ def _deterministic_summary(state: RunState) -> str:
     rec = r.get("recommend") if "error" not in r.get("recommend", {}) else None
     if rec and rec.get("recommendations"):
         parts.append("**Do next:**")
-        for x in rec["recommendations"][:3]:
-            parts.append(f"1. {x.get('action')} — *effort {x.get('effort', '?')}, "
+        for _i, x in enumerate(rec["recommendations"][:3]):
+            parts.append(f"{_i + 1}. {x.get('action')} — *effort {x.get('effort', '?')}, "
                          f"confidence {x.get('confidence', 0):.0%}, evidence "
                          f"`{x.get('traces_to', '?')}`*")
 

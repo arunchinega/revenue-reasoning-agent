@@ -93,7 +93,7 @@ def _ledger(state):
 async def start_run(file: UploadFile, nl: str = Form(""), use_llm: bool = Form(False)):
     data = await file.read()
     RUN.update(phase="perceiving", state=None, summary="", error=None,
-               use_llm=use_llm, wav=None, clips=[], clip_q=[])
+               use_llm=use_llm, wav=None, clips=[], clip_q=[], _viz_logged=False)
 
     def job():
         try:
@@ -156,6 +156,17 @@ def approve():
             RUN.update(error=f"{type(e).__name__}: {e}", phase="confirm")
     threading.Thread(target=job, daemon=True).start()
     return {"ok": True}
+
+
+def _scrub(o):
+    import math
+    if isinstance(o, dict):
+        return {k: _scrub(v) for k, v in o.items()}
+    if isinstance(o, (list, tuple)):
+        return [_scrub(x) for x in o]
+    if isinstance(o, float) and (math.isnan(o) or math.isinf(o)):
+        return None
+    return o
 
 
 @app.get("/api/status")
@@ -230,13 +241,26 @@ def status():
                 out["winner_name"] = fc.get("winner")
             except Exception as e:  # noqa: BLE001
                 print(f"[charts] bakeoff: {e}", flush=True)
+            out["viz"] = {k: bool(out.get(k)) for k in
+                          ("series", "forecast", "bakeoff", "rules",
+                           "anoms", "top_leaks")}
+            if not RUN.get("_viz_logged"):
+                RUN["_viz_logged"] = True
+                print("[viz] " + " ".join(
+                    f"{k}{'✓' if v else '✗'}" for k, v in out["viz"].items()),
+                    flush=True)
             out["stories"] = {k: fn(st) for k, fn in SS.CAPABILITY_STORIES.items()
                               if k in r and "error" not in r.get(k, {})}
             out["winner"] = fc.get("winner_label")
             out["metrics"] = fc.get("metrics", [])[:6]
             out["summary"] = RUN["summary"]
             out["has_audio"] = RUN["wav"] is not None
-    return out
+    return JSONResponse(_scrub(out))
+
+
+@app.get("/favicon.ico")
+def favicon():
+    return Response(status_code=204)
 
 
 @app.get("/api/clip/{i}")
