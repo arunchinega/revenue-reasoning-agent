@@ -20,6 +20,12 @@ import tempfile
 from pathlib import Path
 
 import pandas as pd
+import os as _os
+_CORES = max(2, ((_os.cpu_count() or 8) * 2) // 3)
+for _v in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS",
+           "TF_NUM_INTRAOP_THREADS", "NUMEXPR_NUM_THREADS"):
+    _os.environ.setdefault(_v, str(_CORES))
+
 import streamlit as st
 
 from core.orchestrator import run_perception, ollama_available
@@ -139,71 +145,8 @@ def _speak(text: str, speaker: str | None = None) -> None:
     # during the run in any phase (the faint window is architecture'd away)
     st.session_state.setdefault("speech_batch", []).append((text, speaker))
     return
-    import json as _json
-    import streamlit.components.v1 as components
-    pref = st.session_state.get("voice_pref", "Female")
-    if pref == "Duet" and speaker:
-        hints = MALE_HINTS if speaker == "critic" else FEMALE_HINTS
-    else:
-        hints = (FEMALE_HINTS if pref in ("Female", "Duet")
-                 else MALE_HINTS if pref == "Male" else [])
-    clean = (text.replace("**", "").replace("`", "").replace("#", "")
-             .replace("→", " to ").replace("Δ", "delta "))
-    components.html(
-        "<script>(function(){try{"
-        f"const HINTS={_json.dumps(hints)};"
-        "function pick(){const vs=window.speechSynthesis.getVoices();"
-        "if(!vs.length)return null;"
-        "const en=vs.filter(v=>v.lang&&v.lang.toLowerCase().startsWith('en'));"
-        "const pool=en.length?en:vs;"
-        "for(const h of HINTS){const m=pool.find(v=>v.name.toLowerCase()"
-        ".includes(h));if(m)return m;}return pool[0];}"
-        f"const u=new SpeechSynthesisUtterance({_json.dumps(clean)});"
-        "u.rate=1.0;u.pitch=1.0;"
-        "const go=()=>{const v=pick();if(v)u.voice=v;"
-        "window.speechSynthesis.speak(u);};"
-        "if(window.speechSynthesis.getVoices().length)go();"
-        "else window.speechSynthesis.onvoiceschanged=()=>{go();"
-        "window.speechSynthesis.onvoiceschanged=null;};"
-        "}catch(e){}})();</script>", height=0)
 
 
-def _flush_speech() -> None:
-    """Speak everything deferred during execution in ONE component —
-    no iframe bursts while the renderer is under load (the faint fix)."""
-    batch = st.session_state.pop("speech_batch", [])
-    if not batch or not st.session_state.get("voice_on"):
-        return
-    import json as _json
-    import streamlit.components.v1 as components
-    pref = st.session_state.get("voice_pref", "Female")
-    items = []
-    for text, speaker in batch:
-        if pref == "Duet" and speaker:
-            hints = MALE_HINTS if speaker == "critic" else FEMALE_HINTS
-        else:
-            hints = (FEMALE_HINTS if pref in ("Female", "Duet")
-                     else MALE_HINTS if pref == "Male" else [])
-        clean = (text.replace("**", "").replace("`", "").replace("#", "")
-                 .replace("→", " to ").replace("Δ", "delta "))
-        items.append({"t": clean, "h": hints})
-    components.html(
-        "<script>(function(){try{"
-        f"const ITEMS={_json.dumps(items)};"
-        "function pick(h){const vs=window.speechSynthesis.getVoices();"
-        "if(!vs.length)return null;"
-        "const en=vs.filter(v=>v.lang&&v.lang.toLowerCase().startsWith('en'));"
-        "const pool=en.length?en:vs;"
-        "for(const k of h){const m=pool.find(v=>v.name.toLowerCase()"
-        ".includes(k));if(m)return m;}return pool[0];}"
-        "function go(){for(const it of ITEMS){"
-        "const u=new SpeechSynthesisUtterance(it.t);u.rate=1.0;"
-        "const v=pick(it.h);if(v)u.voice=v;"
-        "window.speechSynthesis.speak(u);}}"
-        "if(window.speechSynthesis.getVoices().length)go();"
-        "else window.speechSynthesis.onvoiceschanged=()=>{go();"
-        "window.speechSynthesis.onvoiceschanged=null;};"
-        "}catch(e){}})();</script>", height=0)
 
 
 def _story_card(icon: str, title: str, story: str, speak: bool = True,
@@ -248,23 +191,6 @@ def _phase() -> str:
     return st.session_state.get("phase", "idle")
 
 
-def _start_worker(target, *args) -> None:
-    import threading
-    t = threading.Thread(target=target, args=args, daemon=True)
-    try:  # make the thread's session_state writes visible to the page (1.5x fix)
-        from streamlit.runtime.scriptrunner import (add_script_run_ctx,
-                                                    get_script_run_ctx)
-        add_script_run_ctx(t, get_script_run_ctx())
-    except Exception:  # noqa: BLE001
-        pass
-    st.session_state["worker"] = t
-    st.session_state["worker_error"] = None
-    t.start()
-
-
-def _worker_alive() -> bool:
-    t = st.session_state.get("worker")
-    return bool(t is not None and t.is_alive())
 
 
 def _kpi_strip(state) -> None:
@@ -347,8 +273,8 @@ def screen_run(up, readme_up, nl, use_llm):
             st.stop()
         st.subheader("🔎 Perception — the agent is reading your data")
 
-        if not st.session_state.get("async_mode"):
-            # DEFAULT: synchronous — battle-tested; cards + voice stream progressively
+        if True:
+            # synchronous engine — the only path
             box = st.container()
             try:
                 with st.spinner("Profiling…"):
@@ -367,82 +293,6 @@ def screen_run(up, readme_up, nl, use_llm):
             st.session_state["phase"] = "confirm"
             st.session_state["journey_told"] = False
             _checkpoint("confirm")
-        else:
-            # ASYNC: heavy work in a worker thread; the page never blocks, so
-            # the websocket stays alive and the tab can never white-screen.
-            if st.session_state.get("worker") is None:
-                if "pending_csv" not in st.session_state:
-                    st.session_state["pending_csv"] = up.getvalue()
-                    st.session_state["pending_name"] = up.name
-                    st.session_state["pending_readme"] = (
-                        readme_up.read().decode("utf-8", "replace") if readme_up else "")
-                    st.session_state["pending_nl"] = nl.strip()
-                    st.session_state["pending_llm"] = use_llm
-                payload = st.session_state
-
-                def _percieve_job(ss):
-                    import io as _io
-                    try:
-                        state = run_perception(
-                            _io.BytesIO(ss["pending_csv"]),
-                            nl_request=ss["pending_nl"],
-                            readme_text=ss["pending_readme"],
-                            filename=ss["pending_name"],
-                            base_dir=str(Path(tempfile.gettempdir()) / "rra_runs"),
-                            use_llm=ss["pending_llm"],
-                            on_state=lambda stx: ss.__setitem__("state_live", stx))
-                        ss["state"] = state
-                    except Exception as exc:  # noqa: BLE001
-                        ss["worker_error"] = f"Perception failed: {exc}"
-
-                if st.session_state.get("pending_llm") and not st.session_state.get("warmed"):
-                    st.info("🔥 Warming local models first (one-time on a cold "
-                            "start) — the page stays live throughout.")
-                    st.session_state["warmed"] = True
-
-                    def _full_job(ss):
-                        try:
-                            from core.llm import warm_up
-                            warm_up()
-                        except Exception:  # noqa: BLE001
-                            pass
-                        _percieve_job(ss)
-                    _start_worker(_full_job, payload)
-                else:
-                    _start_worker(_percieve_job, payload)
-
-            @st.fragment(run_every="1.0s")
-            def _perceive_poll():
-                err = st.session_state.get("worker_error")
-                if err:
-                    st.session_state.update(phase="idle", worker=None)
-                    for k in ("pending_csv", "pending_name", "pending_readme",
-                              "pending_nl", "pending_llm"):
-                        st.session_state.pop(k, None)
-                    st.error(err)
-                    st.rerun()
-                _final = st.session_state.get("state")
-                if _final is None and not _worker_alive() and \
-                        st.session_state.get("state_live") is not None:
-                    st.session_state["state"] = st.session_state["state_live"]
-                    _final = st.session_state["state"]
-                if _final is not None and not _worker_alive():
-                    st.session_state["worker"] = None
-                    st.session_state["phase"] = "confirm"
-                    st.session_state["journey_told"] = False
-                    _checkpoint("confirm")
-                    st.rerun()
-                stt = (st.session_state.get("state")
-                       or st.session_state.get("state_live"))
-                n = len(stt.ledger.entries) if stt is not None else 0
-                last = stt.ledger.entries[-1].stage if (stt and n) else "starting"
-                st.progress(min(0.1 + n * 0.11, 0.95),
-                            text=f"🧠 {n} decisions logged — now in `{last}`…")
-                if stt is not None:
-                    for e in stt.ledger.entries[-4:]:
-                        st.caption(f"`{e.stage}` — {e.decision}")
-            _perceive_poll()
-            st.stop()
 
     state = st.session_state.get("state")
     if _phase() != "idle" and state is None:
@@ -592,7 +442,7 @@ def screen_run(up, readme_up, nl, use_llm):
                         script=speak_fn(st_state) if speak and speak_fn else None,
                         stage_key=intent)
 
-        if not st.session_state.get("async_mode"):
+        if True:
             st.session_state["defer_speech"] = True
             try:
                 with st.spinner("Planner → Executor → Critic at work…"):
@@ -608,56 +458,6 @@ def screen_run(up, readme_up, nl, use_llm):
             st.session_state["summary"] = summary
             st.session_state["phase"] = "done"
             _checkpoint("done")
-        else:
-            # ASYNC PARALLEL: independent capabilities race in threads; cards
-            # open the moment each lands; narration queues over them.
-            if st.session_state.get("worker") is None and \
-                    not st.session_state.get("caps_started"):
-                st.session_state["caps_started"] = True
-                st.session_state["cap_done"] = []
-                st.session_state["spoken_caps"] = []
-                payload = st.session_state
-
-                def _exec_job(ss):
-                    try:
-                        from core.dispatcher import run_capabilities_parallel
-                        run_capabilities_parallel(
-                            ss["state"], use_llm=ss.get("pending_llm", False),
-                            on_capability_done=lambda i, s2:
-                            ss["cap_done"].append(i))
-                        ss["summary"] = run_narration(
-                            ss["state"], use_llm=ss.get("pending_llm", False))
-                    except Exception as exc:  # noqa: BLE001
-                        ss["worker_error"] = f"Execution failed: {exc}"
-                _start_worker(_exec_job, payload)
-
-            @st.fragment(run_every="1.0s")
-            def _exec_poll():
-                err = st.session_state.get("worker_error")
-                if err:
-                    st.session_state.update(phase="confirm", worker=None,
-                                            caps_started=False)
-                    st.error(err + " — plan can be adjusted and re-approved.")
-                    st.rerun()
-                stt = st.session_state["state"]
-                done_caps = list(st.session_state.get("cap_done", []))
-                total = max(len(stt.intents), 1)
-                st.progress(min(len(done_caps) / total, 0.98),
-                            text=f"⚡ {len(done_caps)}/{total} capabilities "
-                                 f"complete — running in parallel…")
-                for intent in done_caps:
-                    speak = intent not in st.session_state["spoken_caps"]
-                    if speak:
-                        st.session_state["spoken_caps"].append(intent)
-                    _render_cap_card(intent, stt, speak=speak)
-                if not _worker_alive() and st.session_state.get("summary"):
-                    st.session_state["worker"] = None
-                    st.session_state["caps_started"] = False
-                    st.session_state["phase"] = "done"
-                    _checkpoint("done")
-                    st.rerun()
-            _exec_poll()
-            st.stop()
 
     if _phase() == "done":
         st.session_state["defer_speech"] = False
@@ -694,7 +494,7 @@ def screen_run(up, readme_up, nl, use_llm):
                         except Exception:  # noqa: BLE001
                             pass
             if batch and st.session_state.get("voice_on"):
-                if str(st.session_state.get("voice_engine", "🖥")).startswith("🖥"):
+                if True:
                     from agents.voicebox import synth_narration
                     with st.spinner("🎙 Rendering narration…"):
                         wav = synth_narration(
@@ -705,12 +505,8 @@ def screen_run(up, readme_up, nl, use_llm):
                         st.audio(wav, format="audio/wav", autoplay=True)
                         st.caption("🎙 Narration (server-rendered)")
                     else:
-                        st.warning("🎙 Server voice unavailable — run "
-                                   "`pip install pyttsx3`. Falling back to "
-                                   "browser narration.")
-                        _flush_speech()
-                else:
-                    _flush_speech()
+                        st.warning("🎙 Voice unavailable — run "
+                                   "`pip install pyttsx3` and rerun.")
         st.success("✅ Analysis complete — open **📖 Findings** in the sidebar "
                    "for the story, **🔬 Evidence** for the charts, and "
                    "**🧠 Reasoning** for every decision the agent made.")
@@ -1506,14 +1302,9 @@ with st.sidebar:
                   help="Browser voice gives a running commentary (demo mode).")
         st.toggle("🪶 Light journey (text cards, charts stay on Data & "
                   "Features)", value=True, key="light_journey")
-        st.toggle("⚡ Experimental async engine", value=False, key="async_mode",
-                  help="Parallel capabilities + live progress bar. Default off: "
-                       "the synchronous engine is the battle-tested path.")
+
         if st.session_state.get("voice_on"):
-            st.radio("Voice engine", ["🖥 Server (recommended)", "🌐 Browser"],
-                     index=0, key="voice_engine", horizontal=True,
-                     help="Server: Windows voices rendered to audio — the "
-                          "browser speech engine is never used.")
+
             st.selectbox("Voice", ["Female", "Male",
                                    "Duet (Narrator + Critic)", "Auto"],
                          index=0, key="voice_pref",
