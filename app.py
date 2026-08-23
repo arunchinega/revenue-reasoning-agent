@@ -556,10 +556,6 @@ def screen_run(up, readme_up, nl, use_llm):
                                        f"intents={state.intents}",
                              hitl_required=True, hitl_resolution="approved")
             st.session_state["phase"] = "execute"
-            if st.session_state.get("voice_on"):
-                import streamlit.components.v1 as _c
-                _c.html("<script>try{window.speechSynthesis.cancel();}"
-                        "catch(e){}</script>", height=0)
         if _phase() == "confirm":
             st.stop()
 
@@ -691,6 +687,9 @@ def screen_run(up, readme_up, nl, use_llm):
                         st.audio(wav, format="audio/wav", autoplay=True)
                         st.caption("🎙 Narration (server-rendered)")
                     else:
+                        st.warning("🎙 Server voice unavailable — run "
+                                   "`pip install pyttsx3`. Falling back to "
+                                   "browser narration.")
                         _flush_speech()
                 else:
                     _flush_speech()
@@ -1174,7 +1173,8 @@ def screen_evidence():
                     if sub.empty:
                         continue
                     fig.add_scatter(
-                        x=sub["date"], y=sub["billed_amount"], mode="markers",
+                        x=sub["date"],
+                        y=sub[state.column_map["target_column"]], mode="markers",
                         name=f"{tier} ({len(sub)})",
                         marker=dict(color=TIER_COLORS[tier], size=6 + sub["votes"] * 2.2,
                                     opacity=0.55 if tier == "review" else 0.9,
