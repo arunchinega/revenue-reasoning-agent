@@ -26,3 +26,6 @@ python-pptx
 python-docx
 matplotlib
 pyttsx3
+fastapi
+uvicorn
+python-multipart

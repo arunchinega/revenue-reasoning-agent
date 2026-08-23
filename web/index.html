@@ -1,0 +1,72 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Revenue Reasoning Agent</title>
+<style>
+:root{--bg:#12181f;--card:#1a222c;--ink:#e8edf2;--mut:#8fa1b3;--amber:#e9a13b;--teal:#2fbfa8;--red:#d14836}
+*{box-sizing:border-box}body{margin:0;font-family:Segoe UI,system-ui,sans-serif;background:var(--bg);color:var(--ink)}
+.wrap{max-width:960px;margin:0 auto;padding:28px}
+h1{font-size:26px;margin:0 0 4px}.sub{color:var(--mut);margin-bottom:22px}
+.card{background:var(--card);border:1px solid #26313d;border-radius:12px;padding:16px 18px;margin:12px 0}
+button{background:var(--amber);border:0;color:#1a1208;font-weight:700;font-size:15px;padding:10px 22px;border-radius:8px;cursor:pointer}
+button:disabled{opacity:.5}input,textarea{width:100%;background:#0f141a;color:var(--ink);border:1px solid #26313d;border-radius:8px;padding:9px;font-size:14px}
+.led{font-size:13px;color:var(--mut);margin:4px 0}.led b{color:var(--ink)}
+.hero{font-size:64px;font-weight:800;color:var(--amber);text-align:center;line-height:1.1}
+.hlab{text-align:center;color:var(--mut)}.story b{color:var(--teal)}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.tag{display:inline-block;background:#0f141a;border:1px solid #26313d;border-radius:20px;padding:2px 10px;font-size:12px;color:var(--mut);margin:2px}
+#err{color:var(--red)}
+</style></head><body><div class="wrap">
+<h1>🧭 Revenue Reasoning Agent</h1>
+<div class="sub">Built by <b>Arun Chinega</b> · AI Centre of Excellence — engine-direct web UI</div>
+
+<div class="card" id="setup">
+  <input type="file" id="csv" accept=".csv"><br><br>
+  <textarea id="nl" rows="2">Find revenue leakage, forecast next month, explain why revenue moved, flag order anomalies, segment customers and recommend actions.</textarea><br><br>
+  <label><input type="checkbox" id="llm" style="width:auto"> Use LLM agents (Ollama)</label>
+  &nbsp;&nbsp;<button id="go">▶ Run analysis</button>
+</div>
+
+<div class="card" id="live" style="display:none">
+  <div id="phase" style="font-weight:700"></div>
+  <div id="ledger"></div>
+  <div id="plan" style="display:none"><p class="story" id="planstory"></p>
+    <button id="approve">✅ Approve plan</button></div>
+</div>
+
+<div id="results" style="display:none">
+  <div class="card"><div class="hlab">estimated recoverable revenue</div>
+    <div class="hero" id="hero"></div>
+    <div style="text-align:center;margin-top:8px"><span class="tag" id="winner"></span>
+      <span class="tag" id="dom"></span></div>
+    <div style="text-align:center;margin-top:10px"><audio id="voice" controls></audio></div></div>
+  <div class="grid" id="stories"></div>
+  <div class="card"><b>Executive summary</b><div id="summary" style="white-space:pre-wrap;color:var(--mut);font-size:14px"></div></div>
+  <div class="card"><b>Decision ledger</b><div id="ledger2"></div></div>
+</div>
+<div class="card" id="err" style="display:none"></div>
+
+<script>
+const $=id=>document.getElementById(id);let timer=null;
+$('go').onclick=async()=>{const f=$('csv').files[0];if(!f){alert('choose a CSV');return}
+  const fd=new FormData();fd.append('file',f);fd.append('nl',$('nl').value);fd.append('use_llm',$('llm').checked);
+  $('go').disabled=true;await fetch('/api/run',{method:'POST',body:fd});
+  $('live').style.display='block';timer=setInterval(poll,1200)};
+$('approve').onclick=async()=>{$('approve').disabled=true;await fetch('/api/approve',{method:'POST'})};
+async function poll(){try{
+  const s=await(await fetch('/api/status')).json();
+  if(s.error){$('err').style.display='block';$('err').textContent=s.error}
+  $('phase').textContent={perceiving:'🔎 Perception — the agent is reading your data…',
+    confirm:'🧑‍⚖️ Your approval needed',executing:'⚙️ Planner → Executor → Critic at work…',
+    done:'✅ Analysis complete'}[s.phase]||s.phase;
+  $('ledger').innerHTML=(s.ledger||[]).slice(-6).map(e=>`<div class="led"><b>${e.stage}</b> · ${e.agent} — ${e.decision}</div>`).join('');
+  if(s.phase==='confirm'){$('plan').style.display='block';$('planstory').innerHTML=md(s.plan_story||'')}
+  else $('plan').style.display='none';
+  if(s.phase==='done'){clearInterval(timer);$('results').style.display='block';
+    $('hero').textContent=s.hero?Number(s.hero).toLocaleString():'—';
+    $('winner').textContent='📈 '+(s.winner||'');$('dom').textContent='🏷 '+(s.domain||'')+' '+Math.round((s.confidence||0)*100)+'%';
+    $('stories').innerHTML=Object.entries(s.stories||{}).map(([k,v])=>`<div class="card story"><b>${k}</b><br>${md(v)}</div>`).join('');
+    $('summary').textContent=(s.summary||'').replace(/[#*]/g,'');
+    $('ledger2').innerHTML=(s.ledger||[]).map(e=>`<div class="led"><b>${e.stage}</b> · ${e.agent} — ${e.decision}</div>`).join('');
+    if(s.has_audio){$('voice').src='/api/audio';$('voice').play().catch(()=>{})}}
+}catch(e){}}
+function md(t){return (t||'').replace(/\*\*(.+?)\*\*/g,'<b>$1</b>')}
+</script></div></body></html>
