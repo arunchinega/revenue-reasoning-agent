@@ -10,8 +10,8 @@ import tempfile
 import wave
 from pathlib import Path
 
-FEMALE = ("zira", "heera", "neerja", "female", "hazel", "susan")
-MALE = ("david", "ravi", "mark", "male", "george")
+FEMALE = ("zira", "heera", "neerja", "female", "susan")   # narrator
+MALE = ("hazel", "david", "ravi", "mark", "male", "george")  # critic voice: Hazel (GB) when no male installed
 
 
 def _pick_voice(engine, hints: tuple[str, ...]):

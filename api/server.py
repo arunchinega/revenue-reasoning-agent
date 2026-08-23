@@ -22,7 +22,58 @@ from agents import stage_stories as SS  # noqa: E402
 
 app = FastAPI(title="RRA API")
 RUN: dict = {"phase": "idle", "state": None, "summary": "", "error": None,
-             "use_llm": False, "wav": None}
+             "use_llm": False, "wav": None, "clips": [], "clip_q": []}
+
+
+def _clip_worker():
+    """Synthesise queued (text, speaker) items into small WAV clips, in order.
+    One subprocess per clip via temp .py — logged, never silent."""
+    import json as _json
+    import subprocess
+    import sys as _sys
+    while True:
+        if not RUN["clip_q"]:
+            import time as _t
+            _t.sleep(0.4)
+            if RUN["phase"] == "idle" and not RUN["clip_q"]:
+                continue
+            continue
+        text, speaker = RUN["clip_q"].pop(0)
+        try:
+            tmp = Path(tempfile.mkdtemp(prefix="rra_clip_"))
+            (tmp / "i.json").write_text(_json.dumps([[text, speaker]]),
+                                        encoding="utf-8")
+            root = Path(__file__).resolve().parents[1]
+            script = tmp / "s.py"
+            lines = [
+                "import json, sys",
+                "from pathlib import Path",
+                f"sys.path.insert(0, {str(root)!r})",
+                "from agents.voicebox import synth_narration",
+                f"it = json.loads(Path({str(tmp / 'i.json')!r})"
+                ".read_text(encoding='utf-8'))",
+                "w = synth_narration([tuple(x) for x in it], duet=True)",
+                f"Path({str(tmp / 'o.wav')!r}).write_bytes(w or b'')",
+            ]
+            script.write_text("\n".join(lines), encoding="utf-8")
+            subprocess.run([_sys.executable, str(script)], timeout=90,
+                           capture_output=True)
+            wav = tmp / "o.wav"
+            if wav.exists() and wav.stat().st_size > 1000:
+                RUN["clips"].append(wav.read_bytes())
+                print(f"[voice] clip {len(RUN['clips'])} ready "
+                      f"({wav.stat().st_size:,}b): {text[:50]}…", flush=True)
+            else:
+                print(f"[voice] clip FAILED: {text[:50]}", flush=True)
+        except Exception as e:  # noqa: BLE001
+            print(f"[voice] clip EXC {type(e).__name__}: {e}", flush=True)
+
+
+threading.Thread(target=_clip_worker, daemon=True).start()
+
+
+def _say(text, speaker="narrator"):
+    RUN["clip_q"].append((text, speaker))
 
 
 def _ledger(state):
@@ -35,7 +86,7 @@ def _ledger(state):
 async def start_run(file: UploadFile, nl: str = Form(""), use_llm: bool = Form(False)):
     data = await file.read()
     RUN.update(phase="perceiving", state=None, summary="", error=None,
-               use_llm=use_llm, wav=None)
+               use_llm=use_llm, wav=None, clips=[], clip_q=[])
 
     def job():
         try:
@@ -45,6 +96,10 @@ async def start_run(file: UploadFile, nl: str = Form(""), use_llm: bool = Form(F
                                 use_llm=use_llm,
                                 on_state=lambda s: RUN.__setitem__("state", s))
             RUN.update(state=st, phase="confirm")
+            _say(SS.SPEAK["ingest"](st))
+            _say(SS.SPEAK["eda"](st))
+            _say(SS.SPEAK["features"](st))
+            _say(SS.SPEAK["plan"](st), "critic")
         except Exception as e:  # noqa: BLE001
             RUN.update(error=f"{type(e).__name__}: {e}", phase="idle")
     threading.Thread(target=job, daemon=True).start()
@@ -81,7 +136,12 @@ def approve():
 
     def job():
         try:
-            run_capabilities(st, use_llm=RUN["use_llm"])
+            def _on_cap(intent, s2):
+                fn = SS.SPEAK.get(intent)
+                if fn:
+                    _say(fn(s2), SS.DUET_SPEAKER.get(intent, "narrator"))
+            run_capabilities(st, use_llm=RUN["use_llm"],
+                             on_capability_done=_on_cap)
             RUN["summary"] = run_narration(st, use_llm=RUN["use_llm"])
             RUN["phase"] = "done"          # results FIRST — never wait on audio
             threading.Thread(target=_voice_job, args=(st,), daemon=True).start()
@@ -94,7 +154,8 @@ def approve():
 @app.get("/api/status")
 def status():
     st = RUN["state"]
-    out = {"phase": RUN["phase"], "error": RUN["error"], "ledger": _ledger(st)}
+    out = {"phase": RUN["phase"], "error": RUN["error"],
+           "ledger": _ledger(st), "clips": len(RUN["clips"])}
     if st is not None:
         out["domain"] = st.domain.get("name")
         out["confidence"] = st.domain.get("confidence", 0)
@@ -107,6 +168,34 @@ def status():
             lk = r.get("leakage", {})
             fc = r.get("forecasting", {})
             out["hero"] = lk.get("total_impact_estimate")
+            # ---- chart payloads ----
+            try:
+                import pandas as pd
+                cm = st.column_map
+                df = st.feature_df if st.feature_df is not None else st.raw_df
+                d = df[[cm["date_column"], cm["target_column"]]].copy()
+                d[cm["date_column"]] = pd.to_datetime(d[cm["date_column"]])
+                ser = d.groupby(cm["date_column"])[cm["target_column"]] \
+                    .sum().sort_index().tail(90)
+                out["series"] = {"dates": [str(x.date()) for x in ser.index],
+                                 "values": [round(float(v), 2) for v in ser.values]}
+                out["forecast"] = fc.get("forecast", [])[:30]
+                out["rules"] = [{"rule": k, "impact": round(v.get("impact_total", 0)),
+                                 "hits": v.get("hits", 0)}
+                                for k, v in lk.get("rules_fired", {}).items()
+                                if v.get("hits")]
+                an = r.get("anomaly", {})
+                pts = [f for f in an.get("flagged", [])
+                       if f.get("tier") in ("high", "medium")][:400]
+                out["anoms"] = [{"d": str(f.get("date"))[:10],
+                                 "v": float(f.get(cm["target_column"], 0)),
+                                 "t": f.get("tier")} for f in pts]
+                out["bakeoff"] = [{"m": m["model"], "mape": m.get("mape")}
+                                  for m in fc.get("metrics", [])
+                                  if m.get("mape") is not None]
+                out["winner_name"] = fc.get("winner")
+            except Exception as e:  # noqa: BLE001
+                print(f"[charts] payload error: {e}", flush=True)
             out["stories"] = {k: fn(st) for k, fn in SS.CAPABILITY_STORIES.items()
                               if k in r and "error" not in r.get(k, {})}
             out["winner"] = fc.get("winner_label")
@@ -114,6 +203,19 @@ def status():
             out["summary"] = RUN["summary"]
             out["has_audio"] = RUN["wav"] is not None
     return out
+
+
+@app.get("/api/clip/{i}")
+def clip(i: int):
+    if i < 0 or i >= len(RUN["clips"]):
+        return Response(status_code=404)
+    return Response(RUN["clips"][i], media_type="audio/wav")
+
+
+@app.get("/chart.js")
+def chartjs():
+    return Response((Path(__file__).parent.parent / "web" / "chart.js")
+                    .read_bytes(), media_type="application/javascript")
 
 
 @app.get("/api/audio")
