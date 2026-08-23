@@ -1,0 +1,31 @@
+llm:
+  reasoner: llama3.1:8b        # intent, planner, critic, rca, recommend
+  reasoner_alt: deepseek-r1:7b # optional toggle (thinking traces -> ledger)
+  narrator: gemma2:2b
+  ollama_url: http://localhost:11434
+
+thresholds:
+  intent_confidence_hitl: 0.7
+  column_map_confidence_hitl: 0.8
+  seasonality_detected: 0.3
+  critic_max_retries: 2
+
+forecasting_registry:            # Planner selects from these, nothing hardcoded
+  - {name: seasonal_naive, family: baseline, gate: always}
+  - {name: ets,            family: statistical, gate: always}
+  - {name: arima_auto,     family: statistical, gate: always}
+  - {name: sarima,         family: statistical, gate: seasonality_detected}
+  - {name: prophet,        family: decomposition, gate: seasonality_or_changepoints}
+  - {name: xgboost_lags,   family: ml_boosting, gate: exog_or_lag_importance}
+  - {name: lstm,           family: deep_learning, gate: min_rows_400}
+
+anomaly_registry:
+  - {name: isolation_forest, type: tree_bagging}
+  - {name: one_class_svm,    type: kernel}
+  - {name: lof,              type: density}
+  - {name: stl_residual,     type: time_aware}
+  - {name: zscore_iqr,       type: statistical_baseline}
+consensus_tiers: {high: 3, medium: 2}
+  # added ML-family diversity (v9):
+  - {name: gradient_boosting, family: ml_boosting, gate: exog_or_lag_importance}
+  - {name: random_forest,     family: ml_bagging,  gate: exog_or_lag_importance}

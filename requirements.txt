@@ -1,0 +1,27 @@
+# core
+pandas>=2.2
+numpy>=1.26,<2 ; python_version < "3.13"
+scikit-learn>=1.5
+scipy>=1.13
+# forecasting
+prophet>=1.1
+statsmodels>=0.14
+pmdarima>=2.0
+xgboost>=2.1
+tensorflow-cpu>=2.16
+# agents / orchestration
+langgraph>=0.2
+langchain-ollama>=0.2
+pydantic>=2
+pyyaml>=6
+# ui
+streamlit>=1.38
+plotly>=5
+# export
+jinja2>=3
+markdown>=3
+streamlit>=1.40
+plotly>=5
+python-pptx
+python-docx
+matplotlib

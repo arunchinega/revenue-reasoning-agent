@@ -1,0 +1,36 @@
+# domain_profiles/profiles.yaml
+# Parameterizes intent vocab + leakage rules per detected domain.
+# Stage 2.0 picks one; "generic" is the always-safe fallback.
+
+utilities:
+  display: "Utilities billing"
+  schema_signals: [meter, kwh, consumption, usage, tariff, bill_date, feeder, connection]
+  intent_vocab:
+    leakage: [unbilled consumption, tariff mismatch, meter bypass, billing leakage, under-billed]
+    anomaly: [meter anomalies, consumption spike, abnormal usage, reading errors]
+    forecasting: [demand forecast, consumption forecast, load forecast]
+  leakage_rules: [unbilled_usage, tariff_misapplication, zero_billed_with_usage, billed_vs_expected_delta, duplicate_billing]
+
+insurance:
+  display: "Insurance / TPA"
+  schema_signals: [policy, premium, claim, coverage, insured, underwriting, deductible]
+  intent_vocab:
+    leakage: [premium leakage, claims overpayment, underpricing]
+    anomaly: [claims anomalies, suspicious claims]
+    forecasting: [premium forecast, claims forecast, loss ratio projection]
+  leakage_rules: [premium_vs_policy_delta, duplicate_claims, zero_billed_with_usage, billed_vs_expected_delta]
+
+banking:
+  display: "Banking / fees"
+  schema_signals: [account, fee, transaction, waiver, balance, interest, branch]
+  intent_vocab:
+    leakage: [fee slippage, waiver abuse, fee leakage, uncollected fees]
+    anomaly: [transaction anomalies, unusual activity]
+    forecasting: [fee income forecast, revenue projection]
+  leakage_rules: [fee_schedule_mismatch, excess_waivers, zero_billed_with_usage, billed_vs_expected_delta, duplicate_billing]
+
+generic:
+  display: "Generic revenue data"
+  schema_signals: []
+  intent_vocab: {}
+  leakage_rules: [billed_vs_expected_delta, zero_billed_with_usage, duplicate_billing]
