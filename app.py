@@ -508,13 +508,13 @@ def screen_run(up, readme_up, nl, use_llm):
             _profs = load_profiles()
         except Exception:  # noqa: BLE001
             _profs = {}
-        if _profs:
+        if _profs and st.checkbox("✏️ Correct the domain", key="fix_dom",
+                                  value=False):
             _names = list(_profs)
             _cur = dom.get("name") if dom.get("name") in _names else _names[-1]
             pick_dom = st.selectbox(
                 "Domain (editable — human override)", _names,
-                index=_names.index(_cur), key="sel_domain",
-                format_func=lambda n: _profs[n].get("display", n))
+                index=_names.index(_cur), key="sel_domain")
             if pick_dom != dom.get("name"):
                 state.domain = {"name": pick_dom, "profile": _profs[pick_dom],
                                 "confidence": 1.0,
