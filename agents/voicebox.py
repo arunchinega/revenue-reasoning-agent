@@ -25,6 +25,28 @@ def _pick_voice(engine, hints: tuple[str, ...]):
     return None
 
 
+def synth_clip_neural(text: str, speaker: str | None) -> bytes | None:
+    """Cloud-capable neural voice via edge-tts (needs internet). MP3 bytes."""
+    try:
+        import asyncio
+        import edge_tts
+        voice = "en-GB-SoniaNeural" if speaker == "critic" else "en-US-AriaNeural"
+        clean = (text.replace("**", "").replace("`", "").replace("#", "")
+                 .replace("→", " to ").replace("Δ", "delta "))
+
+        async def _go():
+            c = edge_tts.Communicate(clean, voice, rate="+8%")
+            buf = b""
+            async for chunk in c.stream():
+                if chunk["type"] == "audio":
+                    buf += chunk["data"]
+            return buf
+        out = asyncio.run(_go())
+        return out if out and len(out) > 800 else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def synth_narration(items: list[tuple[str, str | None]],
                     duet: bool = True) -> bytes | None:
     """items = [(text, speaker)] with speaker in {narrator, critic, None}."""

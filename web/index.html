@@ -14,6 +14,11 @@ button:disabled{opacity:.5}input,textarea{width:100%;background:#0f141a;color:va
 .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 .tag{display:inline-block;background:#0f141a;border:1px solid #26313d;border-radius:20px;padding:2px 10px;font-size:12px;color:var(--mut);margin:2px}
 #err{color:var(--red)}
+table{border-collapse:collapse}
+table tr:nth-child(even) td{background:#0f141a}
+table tr:first-child td{color:var(--amber);border-bottom:1px solid #26313d;padding:4px 6px;font-weight:600}
+table td{padding:4px 6px}
+.cap{color:var(--mut);font-size:12px;margin:4px 0 8px}
 </style></head><body><div class="wrap">
 <h1>🧭 Revenue Reasoning Agent</h1>
 <div class="sub">Built by <b>Arun Chinega</b> · AI Centre of Excellence — engine-direct web UI</div>
@@ -50,10 +55,10 @@ button:disabled{opacity:.5}input,textarea{width:100%;background:#0f141a;color:va
     <div class="card"><b>🚨 Anomalies on the revenue line</b><canvas id="can" height="190"></canvas></div>
   </div>
   <div class="grid">
-    <div class="card"><b>📋 Model metrics</b><div id="tmet"></div></div>
-    <div class="card"><b>💸 Leakage rules</b><div id="trul"></div></div>
+    <div class="card"><b>📋 Model metrics</b><div class='cap'>All models raced on rolling backtests — lower MAPE is better; the certified winner is highlighted.</div><div id="tmet"></div></div>
+    <div class="card"><b>💸 Leakage rules</b><div class='cap'>Deterministic rules; every hit traces to specific records — impact is estimated recoverable revenue.</div><div id="trul"></div></div>
   </div>
-  <div class="card"><b>🔎 Top leakage candidates</b><div id="tlek"></div></div>
+  <div class="card"><b>🔎 Top leakage candidates</b><div class='cap'>Accounts ranked by estimated recoverable amount, with the rule that caught each.</div><div id="tlek"></div></div>
   <div class="card"><b>💬 Ask the agent</b><div style="margin:8px 0">
     <button class="chip" onclick="ask(0)">Which accounts leak most?</button>
     <button class="chip" onclick="ask(1)">How confident is the forecast?</button>

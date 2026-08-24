@@ -29,3 +29,4 @@ pyttsx3
 fastapi
 uvicorn
 python-multipart
+edge-tts

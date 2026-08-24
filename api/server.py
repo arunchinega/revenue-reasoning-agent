@@ -40,6 +40,16 @@ def _clip_worker():
             continue
         text, speaker = RUN["clip_q"].pop(0)
         try:
+            from agents.voicebox import synth_clip_neural
+            mp3 = synth_clip_neural(text, speaker)
+            if mp3:
+                RUN["clips"].append((mp3, "audio/mpeg"))
+                print(f"[voice] clip {len(RUN['clips'])} ready (neural, "
+                      f"{len(mp3):,}b): {text[:50]}…", flush=True)
+                continue
+        except Exception as e:  # noqa: BLE001
+            print(f"[voice] neural EXC {type(e).__name__}: {e}", flush=True)
+        try:
             tmp = Path(tempfile.mkdtemp(prefix="rra_clip_"))
             (tmp / "i.json").write_text(_json.dumps([[text, speaker]]),
                                         encoding="utf-8")
@@ -60,7 +70,7 @@ def _clip_worker():
                            capture_output=True)
             wav = tmp / "o.wav"
             if wav.exists() and wav.stat().st_size > 1000:
-                RUN["clips"].append(wav.read_bytes())
+                RUN["clips"].append((wav.read_bytes(), "audio/wav"))
                 print(f"[voice] clip {len(RUN['clips'])} ready "
                       f"({wav.stat().st_size:,}b): {text[:50]}…", flush=True)
             else:
@@ -267,7 +277,8 @@ def favicon():
 def clip(i: int):
     if i < 0 or i >= len(RUN["clips"]):
         return Response(status_code=404)
-    return Response(RUN["clips"][i], media_type="audio/wav")
+    data, mime = RUN["clips"][i]
+    return Response(data, media_type=mime)
 
 
 @app.get("/chart.js")
