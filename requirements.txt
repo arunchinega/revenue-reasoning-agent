@@ -29,4 +29,5 @@ pyttsx3
 fastapi
 uvicorn
 python-multipart
-edge-tts
+edge-tts>=7.0
+gtts

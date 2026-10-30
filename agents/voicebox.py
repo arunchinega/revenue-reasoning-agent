@@ -25,14 +25,19 @@ def _pick_voice(engine, hints: tuple[str, ...]):
     return None
 
 
+def _clean(text: str) -> str:
+    return (text.replace("**", "").replace("`", "").replace("#", "")
+            .replace("→", " to ").replace("Δ", "delta "))
+
+
 def synth_clip_neural(text: str, speaker: str | None) -> bytes | None:
-    """Cloud-capable neural voice via edge-tts (needs internet). MP3 bytes."""
+    """Cloud-capable neural voice via edge-tts (needs internet). MP3 bytes.
+    Narrator = female (Aria, US); Critic = male (Ryan, GB) for the duet."""
     try:
         import asyncio
         import edge_tts
-        voice = "en-GB-SoniaNeural" if speaker == "critic" else "en-US-AriaNeural"
-        clean = (text.replace("**", "").replace("`", "").replace("#", "")
-                 .replace("→", " to ").replace("Δ", "delta "))
+        voice = "en-GB-RyanNeural" if speaker == "critic" else "en-US-AriaNeural"
+        clean = _clean(text)
 
         async def _go():
             c = edge_tts.Communicate(clean, voice, rate="+8%")
@@ -42,8 +47,32 @@ def synth_clip_neural(text: str, speaker: str | None) -> bytes | None:
                     buf += chunk["data"]
             return buf
         out = asyncio.run(_go())
-        return out if out and len(out) > 800 else None
-    except Exception:  # noqa: BLE001
+        if out and len(out) > 800:
+            return out
+        print("[voice] edge-tts returned empty audio", flush=True)
+        return None
+    except Exception as e:  # noqa: BLE001
+        print(f"[voice] edge-tts failed: {type(e).__name__}: {e}", flush=True)
+        return None
+
+
+def synth_clip_gtts(text: str, speaker: str | None) -> bytes | None:
+    """Fallback cloud voice via gTTS (Google Translate TTS). Works from
+    datacenter IPs where edge-tts gets blocked. One female voice only; the
+    critic gets a UK accent so the duet is still audible as two speakers."""
+    try:
+        import io
+        from gtts import gTTS
+        tld = "co.uk" if speaker == "critic" else "com"
+        buf = io.BytesIO()
+        gTTS(_clean(text), lang="en", tld=tld, slow=False).write_to_fp(buf)
+        data = buf.getvalue()
+        if len(data) > 800:
+            return data
+        print("[voice] gTTS returned empty audio", flush=True)
+        return None
+    except Exception as e:  # noqa: BLE001
+        print(f"[voice] gTTS failed: {type(e).__name__}: {e}", flush=True)
         return None
 
 

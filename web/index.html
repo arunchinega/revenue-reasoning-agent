@@ -27,11 +27,13 @@ table td{padding:4px 6px}
   <input type="file" id="csv" accept=".csv"><br><br>
   <textarea id="nl" rows="2">Find revenue leakage, forecast next month, explain why revenue moved, flag order anomalies, segment customers and recommend actions.</textarea><br><br>
   <label><input type="checkbox" id="llm" style="width:auto"> Use LLM agents (Ollama)</label>
+  &nbsp;&nbsp;<label><input type="checkbox" id="voiceon" style="width:auto" checked> 🔊 Narrate the run</label>
   &nbsp;&nbsp;<button id="go">▶ Run analysis</button>
 </div>
 
 <div class="card" id="live" style="display:none">
-  <div style="margin-bottom:8px"><audio id="voice" controls style="width:100%;height:34px"></audio></div>
+  <div style="margin-bottom:8px"><audio id="voice" controls style="width:100%;height:34px"></audio>
+  <div id="vstat" style="color:var(--mut);font-size:12px;margin-top:4px"></div></div>
   <div style="display:flex;align-items:center;gap:10px">
     <span id="pulse" style="width:10px;height:10px;border-radius:50%;background:var(--amber);display:inline-block"></span>
     <div id="phase" style="font-weight:700"></div>
@@ -77,13 +79,35 @@ table td{padding:4px 6px}
 <script src="/chart.js"></script>
 <script>
 const $=id=>document.getElementById(id);let timer=null,t0=null;
-let played=0,playing=false,clipsAvail=0;
-function tryPlay(){if(playing||played>=clipsAvail)return;playing=true;
+let played=0,playing=false,clipsAvail=0,spoken=[],clipMissing=[];
+// ---- voice: server clip if the server made one, else the browser speaks the line ----
+const vOn=()=>$('voiceon').checked;
+function vstat(t){$('vstat').textContent=t}
+function pickVoice(speaker){
+ const vs=speechSynthesis.getVoices().filter(v=>v.lang&&v.lang.toLowerCase().startsWith('en'));
+ const want=speaker==='critic'
+   ?['ryan','george','david','mark','daniel','guy','male','google uk english male']
+   :['aria','zira','jenny','samantha','sonia','hazel','female','google us english','google uk english female'];
+ for(const w of want){const v=vs.find(v=>v.name.toLowerCase().includes(w));if(v)return v}
+ return vs[0]||null}
+if('speechSynthesis' in window){speechSynthesis.getVoices();speechSynthesis.onvoiceschanged=()=>speechSynthesis.getVoices()}
+function speakBrowser(i){
+ const item=spoken[i];if(!item||!('speechSynthesis' in window)){played++;playing=false;setTimeout(tryPlay,250);return}
+ const u=new SpeechSynthesisUtterance(item.text);const v=pickVoice(item.speaker);if(v)u.voice=v;
+ u.rate=1.04;u.pitch=item.speaker==='critic'?0.85:1.05;
+ u.onend=u.onerror=()=>{played++;playing=false;setTimeout(tryPlay,250)};
+ vstat('🗣 '+(item.speaker||'narrator')+' (browser voice) · line '+(i+1));
+ speechSynthesis.speak(u)}
+function tryPlay(){if(playing||played>=clipsAvail||!vOn())return;playing=true;
+ if(clipMissing.includes(played)){speakBrowser(played);return}
  const a=$('voice');a.src='/api/clip/'+played;
+ const sp=(spoken[played]||{}).speaker||'narrator';
  a.onended=()=>{played++;playing=false;setTimeout(tryPlay,250)};
- a.onerror=()=>{playing=false;setTimeout(tryPlay,2000)};
- a.play().catch(()=>{playing=false;setTimeout(tryPlay,2000)})}
+ a.onerror=()=>{speakBrowser(played)};
+ vstat('🔊 '+sp+' · line '+(played+1)+' of '+clipsAvail);
+ a.play().catch(()=>{speakBrowser(played)})}
 setInterval(()=>{if(!playing&&played<clipsAvail)tryPlay()},2000);
+$('voiceon').onchange=()=>{if(!vOn()){try{speechSynthesis.cancel()}catch(e){}$('voice').pause();vstat('voice off')}};
 $('go').onclick=async()=>{const f=$('csv').files[0];if(!f){alert('choose a CSV');return}
   const fd=new FormData();fd.append('file',f);fd.append('nl',$('nl').value);fd.append('use_llm',$('llm').checked);
   $('go').disabled=true;await fetch('/api/run',{method:'POST',body:fd});
@@ -97,13 +121,13 @@ async function poll(){try{
     done:'✅ Analysis complete'}[s.phase]||s.phase;
   if(t0){const el=Math.floor((Date.now()-t0)/1000);$('clock').textContent='⏱ '+Math.floor(el/60)+'m '+(el%60)+'s'}
   $('pulse').style.background=s.phase==='done'?'var(--teal)':'var(--amber)';
-  clipsAvail=s.clips||0;tryPlay();
+  clipsAvail=s.clips||0;spoken=s.spoken||spoken;clipMissing=s.clip_missing||[];tryPlay();
   $('ledger').innerHTML=(s.ledger||[]).slice(-8).map(e=>`<div class="led"><b>${e.stage}</b> · ${e.agent} — ${e.decision}</div>`).join('');
   if(s.phase==='confirm'){$('plan').style.display='block';$('planstory').innerHTML=md(s.plan_story||'');
    if(s.journey){$('jour').style.display='grid';$('jour').innerHTML=Object.entries(s.journey).map(([k,v])=>'<div class="card story"><b>'+k+'</b><br>'+md(v)+'</div>').join('')}}
   else $('plan').style.display='none';
   if(s.phase==='done'){clearInterval(timer);
-    setInterval(()=>{fetch('/api/status').then(r=>r.json()).then(x=>{clipsAvail=x.clips||0;tryPlay()}).catch(()=>{})},2500);
+    setInterval(()=>{fetch('/api/status').then(r=>r.json()).then(x=>{clipsAvail=x.clips||0;spoken=x.spoken||spoken;clipMissing=x.clip_missing||[];tryPlay()}).catch(()=>{})},2500);
     $('results').style.display='block';
     $('hero').textContent=s.hero?Number(s.hero).toLocaleString():'—';
     $('winner').textContent='📈 '+(s.winner||'');$('dom').textContent='🏷 '+(s.domain||'')+' '+Math.round((s.confidence||0)*100)+'%';
@@ -167,6 +191,6 @@ function drawCharts(s){
    plugins:{legend:{labels:{boxWidth:12}}}}})}
 }catch(e){console.log('charts',e)}}
 async function ask(q){$('ans').innerHTML='…';const r=await(await fetch('/api/ask?q='+q)).json();
- $('ans').innerHTML=md(r.a);fetch('/api/status').then(x=>x.json()).then(x=>{clipsAvail=x.clips||0;tryPlay()})}
+ $('ans').innerHTML=md(r.a);fetch('/api/status').then(x=>x.json()).then(x=>{clipsAvail=x.clips||0;spoken=x.spoken||spoken;clipMissing=x.clip_missing||[];tryPlay()})}
 function md(t){return (t||'').replace(/\*\*(.+?)\*\*/g,'<b>$1</b>')}
 </script></div></body></html>

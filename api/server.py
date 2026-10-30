@@ -22,7 +22,8 @@ from agents import stage_stories as SS  # noqa: E402
 
 app = FastAPI(title="RRA API")
 RUN: dict = {"phase": "idle", "state": None, "summary": "", "error": None,
-             "use_llm": False, "wav": None, "clips": [], "clip_q": []}
+             "use_llm": False, "wav": None, "clips": [], "clip_q": [],
+             "spoken": []}   # spoken: every (text, speaker) ever queued, in order
 
 
 def _clip_worker():
@@ -39,16 +40,21 @@ def _clip_worker():
                 continue
             continue
         text, speaker = RUN["clip_q"].pop(0)
+        idx = len(RUN["clips"])
         try:
-            from agents.voicebox import synth_clip_neural
+            from agents.voicebox import synth_clip_neural, synth_clip_gtts
             mp3 = synth_clip_neural(text, speaker)
+            src = "edge-tts"
+            if not mp3:
+                mp3 = synth_clip_gtts(text, speaker)
+                src = "gTTS"
             if mp3:
                 RUN["clips"].append((mp3, "audio/mpeg"))
-                print(f"[voice] clip {len(RUN['clips'])} ready (neural, "
+                print(f"[voice] clip {idx} ready ({src}, "
                       f"{len(mp3):,}b): {text[:50]}…", flush=True)
                 continue
         except Exception as e:  # noqa: BLE001
-            print(f"[voice] neural EXC {type(e).__name__}: {e}", flush=True)
+            print(f"[voice] cloud EXC {type(e).__name__}: {e}", flush=True)
         try:
             tmp = Path(tempfile.mkdtemp(prefix="rra_clip_"))
             (tmp / "i.json").write_text(_json.dumps([[text, speaker]]),
@@ -71,15 +77,24 @@ def _clip_worker():
             wav = tmp / "o.wav"
             if wav.exists() and wav.stat().st_size > 1000:
                 RUN["clips"].append((wav.read_bytes(), "audio/wav"))
-                print(f"[voice] clip {len(RUN['clips'])} ready "
-                      f"({wav.stat().st_size:,}b): {text[:50]}…", flush=True)
-            else:
-                print(f"[voice] clip FAILED: {text[:50]}", flush=True)
+                print(f"[voice] clip {idx} ready (local, "
+                      f"{wav.stat().st_size:,}b): {text[:50]}…", flush=True)
+                continue
+            print(f"[voice] clip {idx} FAILED server-side, browser will "
+                  f"speak it: {text[:50]}", flush=True)
         except Exception as e:  # noqa: BLE001
-            print(f"[voice] clip EXC {type(e).__name__}: {e}", flush=True)
+            print(f"[voice] clip {idx} EXC {type(e).__name__}: {e}", flush=True)
+        # Keep clip/spoken indices aligned: a placeholder tells the browser
+        # to narrate this one itself with speechSynthesis.
+        RUN["clips"].append((None, None))
 
 
 threading.Thread(target=_clip_worker, daemon=True).start()
+
+
+def _queue(text, speaker):
+    RUN["clip_q"].append((text, speaker))
+    RUN["spoken"].append({"text": text, "speaker": speaker or "narrator"})
 
 
 def _say(text, speaker="narrator"):
@@ -87,10 +102,10 @@ def _say(text, speaker="narrator"):
     while len(text) > 420:                       # long stories → chained clips
         cut = text.rfind(". ", 0, 420)
         cut = cut + 1 if cut > 100 else 420
-        RUN["clip_q"].append((text[:cut].strip(), speaker))
+        _queue(text[:cut].strip(), speaker)
         text = text[cut:].strip()
     if text:
-        RUN["clip_q"].append((text, speaker))
+        _queue(text, speaker)
 
 
 def _ledger(state):
@@ -103,7 +118,8 @@ def _ledger(state):
 async def start_run(file: UploadFile, nl: str = Form(""), use_llm: bool = Form(False)):
     data = await file.read()
     RUN.update(phase="perceiving", state=None, summary="", error=None,
-               use_llm=use_llm, wav=None, clips=[], clip_q=[], _viz_logged=False)
+               use_llm=use_llm, wav=None, clips=[], clip_q=[], spoken=[],
+               _viz_logged=False)
 
     def job():
         try:
@@ -183,7 +199,11 @@ def _scrub(o):
 def status():
     st = RUN["state"]
     out = {"phase": RUN["phase"], "error": RUN["error"],
-           "ledger": _ledger(st), "clips": len(RUN["clips"])}
+           "ledger": _ledger(st), "clips": len(RUN["clips"]),
+           # browser fallback: text of every queued line + which clips the
+           # server could not synthesise (None placeholders)
+           "spoken": RUN["spoken"],
+           "clip_missing": [i for i, (d, _) in enumerate(RUN["clips"]) if d is None]}
     if st is not None:
         out["domain"] = st.domain.get("name")
         out["confidence"] = st.domain.get("confidence", 0)
@@ -278,6 +298,8 @@ def clip(i: int):
     if i < 0 or i >= len(RUN["clips"]):
         return Response(status_code=404)
     data, mime = RUN["clips"][i]
+    if data is None:                      # server-side synth failed for this line
+        return Response(status_code=404)
     return Response(data, media_type=mime)
 
 
