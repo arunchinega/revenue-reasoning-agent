@@ -42,6 +42,17 @@ ecommerce:
   leakage_rules: [billed_vs_expected_delta, zero_billed_with_usage,
                   duplicate_billing, excessive_discount]
 
+transit:
+  display: "Transit & toll fares"
+  schema_signals: [fare, trip, passenger, ridership, line, station, toll, plaza, vehicle, concession]
+  intent_vocab:
+    leakage: [fare leakage, fare evasion, concession abuse, wrong fare class, unbilled trips, toll leakage]
+    anomaly: [ridership spike, gate anomalies, counter errors, traffic anomalies]
+    forecasting: [ridership forecast, fare revenue forecast, traffic forecast]
+    rca: [line disruption, ridership drop, zone decline]
+    segment: [rider segments, commuter cohorts, account segments]
+  leakage_rules: [billed_vs_expected_delta, zero_billed_with_usage, tariff_misapplication, duplicate_billing, excessive_discount]
+
 generic:
   display: "Generic revenue data"
   schema_signals: []

@@ -93,14 +93,21 @@ def run_rca_capability(state: RunState, use_llm: bool = True,
 
     def _fallback() -> dict:
         hyps = []
+        total_drop = abs(float(evidence["focus_window"]["delta_vs_previous"]) or 1.0)
         for d, rows in decomp.items():
             if rows and rows[0]["delta"] < 0:
+                share = min(abs(rows[0]["delta"]) / total_drop, 1.0)
                 hyps.append({
                     "hypothesis": f"decline concentrated in {d}='{rows[0]['value']}' "
-                                  f"(delta {rows[0]['delta']:,.0f})",
-                    "confidence": 0.6,
+                                  f"(delta {rows[0]['delta']:,.0f}, {share:.0%} of the drop)",
+                    # the dimension that explains more of the drop ranks higher
+                    "confidence": round(0.4 + 0.5 * share, 2),
                     "evidence": [f"decomposition.{d}"],
+                    "_delta": rows[0]["delta"],
                 })
+        hyps.sort(key=lambda h: h["_delta"])          # most negative first
+        for h in hyps:
+            h.pop("_delta", None)
         if overlap:
             hyps.append({
                 "hypothesis": f"{len(overlap)} high/medium anomalies fall inside the "
