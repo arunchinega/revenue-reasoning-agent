@@ -1,0 +1,27 @@
+name: Verification checks
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [feature/nextgen-reasoning-foundation]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verification:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Syntax check
+        run: python -m compileall -q core/verification.py core/dispatcher.py tests/test_verification.py
+      - name: Run verification unit tests
+        run: python -m unittest discover -s tests -p 'test_verification.py' -v
