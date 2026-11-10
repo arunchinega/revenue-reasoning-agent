@@ -24,7 +24,7 @@ jobs:
       - name: Install feature-test dependencies
         run: python -m pip install 'pandas>=2.2,<3' 'numpy>=1.26,<3' 'scikit-learn>=1.5,<2' 'scipy>=1.13,<2' 'xgboost>=2.1,<4'
       - name: Syntax check
-        run: python -m compileall -q core/verification.py core/dispatcher.py tests/test_verification.py tests/test_feature_engineering.py capabilities/feature_contract.py tests/test_feature_contract.py tests/test_gradient_boosting_features.py tests/test_random_forest_features.py tests/test_xgboost_features.py capabilities/forecasting.py
+        run: python -m compileall -q core/verification.py core/dispatcher.py tests/test_verification.py tests/test_feature_engineering.py capabilities/feature_contract.py tests/test_feature_contract.py tests/test_gradient_boosting_features.py tests/test_random_forest_features.py tests/test_xgboost_features.py tests/test_benchmark.py capabilities/benchmark.py capabilities/forecasting.py
       - name: Run verification unit tests
         run: python -m unittest discover -s tests -p 'test_verification.py' -v
       - name: Run feature engineering regression tests
@@ -37,3 +37,5 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_random_forest_features.py' -v
       - name: Run XGBoost feature tests
         run: python -m unittest discover -s tests -p 'test_xgboost_features.py' -v
+      - name: Run chronological benchmark tests
+        run: python -m unittest discover -s tests -p 'test_benchmark.py' -v
