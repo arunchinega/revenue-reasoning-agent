@@ -5,6 +5,7 @@ dependency order. This is where the capability plug-ins meet the chassis.
 from __future__ import annotations
 
 from core.state import RunState
+from core.verification import verify_results
 from agents.planner_critic import run_forecasting_capability
 from capabilities.anomaly import run_anomaly_capability
 from capabilities.leakage import run_leakage_capability
@@ -47,6 +48,7 @@ def run_capabilities(state: RunState, use_llm: bool = True,
                 on_capability_done(intent, state)
             except Exception:  # noqa: BLE001 — UI callback must never kill the run
                 pass
+    verify_results(state)
     return state
 
 
@@ -93,4 +95,5 @@ def run_capabilities_parallel(state: RunState, use_llm: bool = True,
                 on_capability_done(intent, state)
             except Exception:  # noqa: BLE001
                 pass
+    verify_results(state)
     return state
