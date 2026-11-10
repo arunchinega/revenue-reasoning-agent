@@ -156,9 +156,36 @@ def _run_ml_lags(model, train: pd.Series, horizon: int, period: int = 7) -> np.n
 
 
 def _run_xgboost_lags(train: pd.Series, horizon: int, period: int = 7, **_) -> np.ndarray:
+    """XGBoost using historical target lags and forecast-known calendar inputs."""
+    from capabilities.feature_contract import select_known_future_features
+
+    lags = tuple(l for l in (1, 2, 3, period, 2 * period) if l < len(train) - 5)
+    if not lags:
+        raise ValueError("Insufficient history for XGBoost lags")
+    calendar = select_known_future_features(
+        ("dow", "month", "is_month_end"), target_column="revenue")
+    X = _make_lag_matrix(train, lags)
+    X["month"] = train.index.month
+    X["is_month_end"] = train.index.is_month_end.astype(int)
+    cols = [f"lag{lag}" for lag in lags] + calendar
+    valid = X[cols].notna().all(axis=1) & train.notna()
+    if valid.sum() < 20:
+        raise ValueError("Insufficient complete training observations")
     model = xgb.XGBRegressor(n_estimators=200, max_depth=4, learning_rate=0.08,
-                             subsample=0.9, verbosity=0)
-    return _run_ml_lags(model, train, horizon, period)
+                             subsample=0.9, verbosity=0, random_state=0, n_jobs=2)
+    model.fit(X.loc[valid, cols], train.loc[valid])
+    history = train.copy()
+    freq = pd.infer_freq(train.index) or "D"
+    predictions = []
+    for _ in range(horizon):
+        next_date = history.index[-1] + pd.tseries.frequencies.to_offset(freq)
+        row = {f"lag{lag}": history.iloc[-lag] for lag in lags}
+        row.update({"dow": next_date.dayofweek, "month": next_date.month,
+                    "is_month_end": int(next_date.is_month_end)})
+        prediction = float(model.predict(pd.DataFrame([row], columns=cols))[0])
+        predictions.append(prediction)
+        history.loc[next_date] = prediction
+    return np.asarray(predictions)
 
 
 def _run_gradient_boosting_lags(train: pd.Series, horizon: int,
