@@ -393,7 +393,19 @@ def screen_run(up, readme_up, nl, use_llm):
                                  default=[i for i in state.intents if i in INTENT_LABELS],
                                  format_func=lambda i: INTENT_LABELS[i])
 
-        if st.button("✅ Approve plan & run", type="primary", key="approve"):
+        if state.plan.get("human_approval") == "rejected":
+            st.warning("Plan rejected. Adjust the selections above and approve "
+                       "a revised plan, or leave without running any agents.")
+        approve_col, reject_col = st.columns(2)
+        if reject_col.button("❌ Reject plan", key="reject_plan"):
+            resolve_plan(state, "rejected")
+            st.session_state["phase"] = "confirm"
+            _checkpoint("confirm")
+            st.warning("Plan rejected. No capabilities have executed. "
+                       "You can revise the plan and approve it later.")
+            st.stop()
+
+        if approve_col.button("✅ Approve plan & run", type="primary", key="approve"):
             changed = (date_col != cm.get("date_column")
                        or target_col != cm.get("target_column")
                        or (None if id_col == "(none)" else id_col) != cm.get("id_column")
