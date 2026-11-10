@@ -439,13 +439,11 @@ class CandidateResult:
 
 def prepare_series(df: pd.DataFrame, date_col: str, target_col: str,
                    preprocessing: Optional[dict] = None) -> pd.Series:
-    """Aggregate to a regular series; apply Planner/Critic preprocessing."""
+    """Aggregate to a regular series; defer fitted transforms to backtesting."""
     ts = (df[[date_col, target_col]].dropna()
           .groupby(date_col)[target_col].sum().sort_index())
     prep = preprocessing or {}
-    if prep.get("winsorize"):
-        lo, hi = ts.quantile(0.01), ts.quantile(0.99)
-        ts = ts.clip(lo, hi)
+    # Winsorization is fitted on each training fold in run_backtest.
     if prep.get("fill_gaps"):
         freq = (pd.infer_freq(ts.index) if len(ts.index) >= 3 else None) or "D"
         # Never interpolate from a later observation into an earlier date:
@@ -457,7 +455,8 @@ def prepare_series(df: pd.DataFrame, date_col: str, target_col: str,
 
 
 def run_backtest(ts: pd.Series, candidates: list[str], period: int = 7,
-                 horizon: int = 30, n_folds: int = 3) -> dict[str, CandidateResult]:
+                 horizon: int = 30, n_folds: int = 3,
+                 preprocessing: Optional[dict] = None) -> dict[str, CandidateResult]:
     """Rolling-origin: k folds, each trains on prefix, predicts next horizon."""
     registry = {m.name: m for m in build_registry()}
     horizon = min(horizon, max(len(ts) // 6, 7))
@@ -475,6 +474,9 @@ def run_backtest(ts: pd.Series, candidates: list[str], period: int = 7,
         res = CandidateResult(name, model.family)
         for start in fold_starts:
             train, test = ts.iloc[:start], ts.iloc[start:start + horizon]
+            if (preprocessing or {}).get("winsorize"):
+                lo, hi = train.quantile([0.01, 0.99])
+                train = train.clip(lo, hi)
             if test.empty:
                 continue
             try:
@@ -488,7 +490,11 @@ def run_backtest(ts: pd.Series, candidates: list[str], period: int = 7,
         # final future forecast on full history (only if backtest worked)
         if res.fold_mape and not res.error:
             try:
-                res.forecast = model.runner(ts, horizon, period=period)
+                fit_ts = ts
+                if (preprocessing or {}).get("winsorize"):
+                    lo, hi = ts.quantile([0.01, 0.99])
+                    fit_ts = ts.clip(lo, hi)
+                res.forecast = model.runner(fit_ts, horizon, period=period)
             except Exception as e:  # noqa: BLE001
                 res.error = f"final fit failed: {e}"
         results[name] = res
