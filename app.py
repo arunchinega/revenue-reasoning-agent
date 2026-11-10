@@ -30,6 +30,7 @@ import streamlit as st
 
 from core.orchestrator import run_perception, ollama_available
 from core.dispatcher import run_capabilities
+from core.hitl import resolve_plan
 from agents.narrator import run_narration, build_report_markdown
 
 try:
@@ -402,11 +403,7 @@ def screen_run(up, readme_up, nl, use_llm):
             state.intents = [i for i in
                              ("segment", "anomaly", "leakage", "forecasting",
                               "rca", "whatif", "recommend") if i in intents]
-            state.ledger.log(stage="plan_approval", agent="human",
-                             decision="Plan approved" + (" with edits" if changed else " as proposed"),
-                             reasoning=f"columns=({date_col},{target_col},{id_col}); "
-                                       f"intents={state.intents}",
-                             hitl_required=True, hitl_resolution="approved")
+            resolve_plan(state, "approved")
             st.session_state["phase"] = "execute"
         if _phase() == "confirm":
             st.stop()
@@ -446,7 +443,7 @@ def screen_run(up, readme_up, nl, use_llm):
             st.session_state["defer_speech"] = True
             try:
                 with st.spinner("Planner → Executor → Critic at work…"):
-                    run_capabilities(state, use_llm=use_llm,
+                    run_capabilities(state, use_llm=use_llm, require_approval=True,
                                      on_capability_done=lambda i, s2:
                                      _render_cap_card(i, s2))
                     summary = run_narration(state, use_llm=use_llm)
