@@ -99,19 +99,14 @@ def _show(fig):
 
 
 def _stream_ledger(state, container, already: int = 0) -> None:
-    orig = state.ledger.log
+    """Render a static ledger snapshot; never monkey-patch the ledger writer.
 
-    def hooked(**kw):
-        entry = orig(**kw)
-        with container:
-            st.markdown(_entry_md(entry), unsafe_allow_html=True)
-            st.divider()
-        return entry
-
-    state.ledger.log = hooked
+    Updating Streamlit nodes from nested agent callbacks can produce frontend
+    delta tree errors (setIn/ElementNode) on recent Streamlit versions.
+    """
     with container:
-        for e in state.ledger.entries[already:]:
-            st.markdown(_entry_md(e), unsafe_allow_html=True)
+        for entry in state.ledger.entries[already:]:
+            st.markdown(_entry_md(entry), unsafe_allow_html=True)
             st.divider()
 
 
@@ -421,54 +416,28 @@ def screen_run(up, readme_up, nl, use_llm):
             st.stop()
 
     if _phase() == "execute":
-        st.subheader("🤖 Reasoning — live ledger")
-        box = st.container()
-        n_before = len(state.ledger.entries)
-        _stream_ledger(state, box, already=max(0, n_before - 1))
-        from agents import stage_stories as SS
-        cap_icons = {"segment": "👥", "anomaly": "🚨", "leakage": "💸",
-                     "forecasting": "🏁", "rca": "🔍", "whatif": "🎛",
-                     "recommend": "✅"}
-
-        def _render_cap_card(intent, st_state, speak=True):
-            fn = SS.CAPABILITY_STORIES.get(intent)
-            if fn is None:
-                return
-            res = st_state.results.get(intent, {})
-            if isinstance(res, dict) and "error" in res:
-                _story_card(cap_icons.get(intent, "•"), intent,
-                            f"This capability failed: `{res['error']}` — "
-                            f"the rest of the run continues without it.",
-                            speak=False)
-                return
-            if intent == "forecasting":
-                _story_card("🏁", "The bake-off", SS.bakeoff_story(st_state),
-                            speak=False)
-            speak_fn = SS.SPEAK.get(intent)
-            _story_card(cap_icons.get(intent, "•"),
-                        intent.replace("_", " ").title(), fn(st_state),
-                        speak=speak,
-                        script=speak_fn(st_state) if speak and speak_fn else None,
-                        stage_key=intent)
-
-        if True:
-            st.session_state["defer_speech"] = True
-            try:
-                with st.spinner("Planner → Executor → Critic at work…"):
-                    run_capabilities(state, use_llm=use_llm, require_approval=True,
-                                     on_capability_done=lambda i, s2:
-                                     _render_cap_card(i, s2))
-                    summary = run_narration(state, use_llm=use_llm)
-            except Exception as exc:  # noqa: BLE001
-                st.session_state["phase"] = "confirm"
-                st.error(f"Execution failed: {exc} — plan can be adjusted "
-                         f"and re-approved.")
-                st.stop()
-            st.session_state["summary"] = summary
-            st.session_state["phase"] = "done"
-            _checkpoint("done")
+        st.subheader("🤖 Reasoning — executing approved plan")
+        st.info("Planner → Executor → Critic are running. "
+                "The completed reasoning ledger will appear after execution.")
+        st.session_state["defer_speech"] = True
+        try:
+            with st.spinner("Running analytical capabilities and verification…"):
+                # Keep agent callbacks free of Streamlit rendering operations.
+                # The ledger is persisted by the engine and displayed afterward.
+                run_capabilities(state, use_llm=use_llm, require_approval=True)
+                summary = run_narration(state, use_llm=use_llm)
+        except Exception as exc:  # noqa: BLE001
+            st.session_state["phase"] = "confirm"
+            st.error(f"Execution failed: {exc} — plan can be adjusted "
+                     f"and re-approved.")
+            st.stop()
+        st.session_state["summary"] = summary
+        st.session_state["phase"] = "done"
+        _checkpoint("done")
 
     if _phase() == "done":
+        st.subheader("🤖 Completed reasoning ledger")
+        _stream_ledger(state, st.container())
         st.session_state["defer_speech"] = False
         from agents import stage_stories as SS
         r0 = state.results
