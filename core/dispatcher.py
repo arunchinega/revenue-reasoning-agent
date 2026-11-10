@@ -5,6 +5,7 @@ dependency order. This is where the capability plug-ins meet the chassis.
 from __future__ import annotations
 
 from core.state import RunState
+from core.hitl import require_approved_plan
 from core.verification import verify_results
 from agents.planner_critic import run_forecasting_capability
 from capabilities.anomaly import run_anomaly_capability
@@ -27,9 +28,11 @@ _RUNNERS = {
 
 
 def run_capabilities(state: RunState, use_llm: bool = True,
-                     on_capability_done=None) -> RunState:
+                     on_capability_done=None, require_approval: bool = False) -> RunState:
     """on_capability_done(intent, state) fires after each capability finishes
     (success or failure) — the UI uses it to render stage cards live."""
+    if require_approval:
+        require_approved_plan(state)
     for intent in state.intents:
         runner = _RUNNERS.get(intent)
         if runner is None:
@@ -58,9 +61,12 @@ DEPENDENT = ("rca", "whatif", "recommend")   # need earlier results
 
 def run_capabilities_parallel(state: RunState, use_llm: bool = True,
                               on_capability_done=None,
-                              max_workers: int = 3) -> RunState:
+                              max_workers: int = 3,
+                              require_approval: bool = False) -> RunState:
     """Independent capabilities race concurrently; dependents run after.
     Same failure isolation and callback contract as run_capabilities."""
+    if require_approval:
+        require_approved_plan(state)
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
     def _one(intent: str) -> str:
