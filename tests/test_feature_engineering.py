@@ -19,8 +19,10 @@ class TimeFeatureTests(unittest.TestCase):
         for window in (7, 30):
             for statistic in ("rollmean", "rollstd"):
                 column = f"revenue_{statistic}{window}"
-                self.assertEqual(first.loc[20, column], second.loc[20, column],
-                                 f"{column} leaked the current target")
+                a, b = first.loc[20, column], second.loc[20, column]
+                if pd.isna(a) and pd.isna(b):
+                    continue  # insufficient history for this rolling window
+                self.assertEqual(a, b, f"{column} leaked the current target")
         self.assertEqual(first.loc[20, "revenue_rollmean7"], 16.0)
         self.assertTrue(pd.isna(first.loc[0, "revenue_rollmean7"]))
 
