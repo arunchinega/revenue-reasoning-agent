@@ -39,3 +39,12 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_xgboost_features.py' -v
       - name: Run chronological benchmark tests
         run: python -m unittest discover -s tests -p 'test_benchmark.py' -v
+      - name: Run synthetic forecasting comparison
+        run: python -m scripts.run_forecasting_benchmark
+      - name: Upload benchmark report
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: synthetic-forecast-benchmark
+          path: benchmark_results/
+          if-no-files-found: warn
