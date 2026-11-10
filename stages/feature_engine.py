@@ -46,6 +46,41 @@ def _time_features(df: pd.DataFrame, date_col: str, target_col: str,
     return df, applied
 
 
+
+def _customer_daily_features(df: pd.DataFrame, date_col: str, id_col: str,
+                             target_col: str) -> tuple[pd.DataFrame, list[str]]:
+    """Historical customer-day features, shared by same-day transactions.
+
+    Aggregation precedes lagging: no same-day transaction sees another same-day
+    target, and no customer's history can contaminate another's. These features
+    describe previous *observed customer days*, not necessarily calendar days.
+    """
+    work = df[[id_col, date_col, target_col]].copy()
+    work["_customer_day"] = pd.to_datetime(work[date_col]).dt.normalize()
+    daily = (work.groupby([id_col, "_customer_day"], dropna=False,
+                          as_index=False)[target_col].sum(min_count=1)
+             .sort_values([id_col, "_customer_day"], kind="stable"))
+    grp = daily.groupby(id_col, dropna=False)[target_col]
+    daily["customer_revenue_lag1"] = grp.shift(1)
+    daily["customer_revenue_rollmean7"] = daily.groupby(
+        id_col, dropna=False)[target_col].transform(
+            lambda s: s.shift(1).rolling(7, min_periods=7).mean())
+    daily["customer_revenue_rollstd7"] = daily.groupby(
+        id_col, dropna=False)[target_col].transform(
+            lambda s: s.shift(1).rolling(7, min_periods=7).std())
+    names = ["customer_revenue_lag1", "customer_revenue_rollmean7",
+             "customer_revenue_rollstd7"]
+    work["_row_order"] = range(len(work))
+    enriched = work[[id_col, "_customer_day", "_row_order"]].merge(
+        daily[[id_col, "_customer_day", *names]],
+        on=[id_col, "_customer_day"], how="left", validate="many_to_one")
+    enriched = enriched.sort_values("_row_order")
+    result = df.copy()
+    for name in names:
+        result[name] = enriched[name].to_numpy()
+    return result, names
+
+
 def _rfm_features(df: pd.DataFrame, date_col: str, id_col: str,
                   target_col: str) -> tuple[pd.DataFrame, list[str]]:
     """Customer-level RFM merged back onto rows."""
@@ -108,6 +143,9 @@ def run_feature_engineering(state: RunState) -> RunState:
     cols = df.columns.tolist()
     id_col = _find_col(cols, "customer", "account", "client", "meter", "user_id")
     if id_col and date_cols and target:
+        df, daily_feats = _customer_daily_features(df, date_cols[0], id_col, target)
+        applied["customer_daily"] = daily_feats
+        evidence.append("historical customer-day aggregates (shifted before rolling)")
         df, feats = _rfm_features(df, date_cols[0], id_col, target)
         applied["rfm"] = feats
         evidence.append("eda.categorical(id column present)")
