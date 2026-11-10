@@ -31,8 +31,10 @@ def _time_features(df: pd.DataFrame, date_col: str, target_col: str,
                 applied.append(f"{target_col}_lag{lag}")
         for w in ROLL_WINDOWS:
             if len(df) > w + 5:
-                df[f"{target_col}_rollmean{w}"] = df[target_col].rolling(w).mean()
-                df[f"{target_col}_rollstd{w}"] = df[target_col].rolling(w).std()
+                # Shift before rolling: the current target must never enter its own predictor.
+                historical = df[target_col].shift(1)
+                df[f"{target_col}_rollmean{w}"] = historical.rolling(w).mean()
+                df[f"{target_col}_rollstd{w}"] = historical.rolling(w).std()
                 applied += [f"{target_col}_rollmean{w}", f"{target_col}_rollstd{w}"]
     elif freq in ("weekly", "monthly"):
         lag = 1
