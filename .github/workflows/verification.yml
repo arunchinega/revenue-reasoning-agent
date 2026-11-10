@@ -24,8 +24,10 @@ jobs:
       - name: Install feature-test dependencies
         run: python -m pip install 'pandas>=2.2,<3' 'numpy>=1.26,<3'
       - name: Syntax check
-        run: python -m compileall -q core/verification.py core/dispatcher.py tests/test_verification.py tests/test_feature_engineering.py
+        run: python -m compileall -q core/verification.py core/dispatcher.py tests/test_verification.py tests/test_feature_engineering.py capabilities/feature_contract.py tests/test_feature_contract.py
       - name: Run verification unit tests
         run: python -m unittest discover -s tests -p 'test_verification.py' -v
       - name: Run feature engineering regression tests
         run: python -m unittest discover -s tests -p 'test_feature_engineering.py' -v
+      - name: Run forecast feature contract tests
+        run: python -m unittest discover -s tests -p 'test_feature_contract.py' -v
