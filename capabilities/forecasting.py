@@ -447,7 +447,7 @@ def prepare_series(df: pd.DataFrame, date_col: str, target_col: str,
         lo, hi = ts.quantile(0.01), ts.quantile(0.99)
         ts = ts.clip(lo, hi)
     if prep.get("fill_gaps"):
-        freq = pd.infer_freq(ts.index) or "D"
+        freq = (pd.infer_freq(ts.index) if len(ts.index) >= 3 else None) or "D"
         # Never interpolate from a later observation into an earlier date:
         # that would expose future billing values to chronological backtests.
         # This is a past-only carry-forward assumption, NOT a claim that
