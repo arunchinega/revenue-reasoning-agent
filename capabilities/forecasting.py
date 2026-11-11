@@ -156,9 +156,36 @@ def _run_ml_lags(model, train: pd.Series, horizon: int, period: int = 7) -> np.n
 
 
 def _run_xgboost_lags(train: pd.Series, horizon: int, period: int = 7, **_) -> np.ndarray:
+    """XGBoost using historical target lags and forecast-known calendar inputs."""
+    from capabilities.feature_contract import select_known_future_features
+
+    lags = tuple(l for l in (1, 2, 3, period, 2 * period) if l < len(train) - 5)
+    if not lags:
+        raise ValueError("Insufficient history for XGBoost lags")
+    calendar = select_known_future_features(
+        ("dow", "month", "is_month_end"), target_column="revenue")
+    X = _make_lag_matrix(train, lags)
+    X["month"] = train.index.month
+    X["is_month_end"] = train.index.is_month_end.astype(int)
+    cols = [f"lag{lag}" for lag in lags] + calendar
+    valid = X[cols].notna().all(axis=1) & train.notna()
+    if valid.sum() < 20:
+        raise ValueError("Insufficient complete training observations")
     model = xgb.XGBRegressor(n_estimators=200, max_depth=4, learning_rate=0.08,
-                             subsample=0.9, verbosity=0)
-    return _run_ml_lags(model, train, horizon, period)
+                             subsample=0.9, verbosity=0, random_state=0, n_jobs=2)
+    model.fit(X.loc[valid, cols], train.loc[valid])
+    history = train.copy()
+    freq = pd.infer_freq(train.index) or "D"
+    predictions = []
+    for _ in range(horizon):
+        next_date = history.index[-1] + pd.tseries.frequencies.to_offset(freq)
+        row = {f"lag{lag}": history.iloc[-lag] for lag in lags}
+        row.update({"dow": next_date.dayofweek, "month": next_date.month,
+                    "is_month_end": int(next_date.is_month_end)})
+        prediction = float(model.predict(pd.DataFrame([row], columns=cols))[0])
+        predictions.append(prediction)
+        history.loc[next_date] = prediction
+    return np.asarray(predictions)
 
 
 def _run_gradient_boosting_lags(train: pd.Series, horizon: int,
@@ -201,19 +228,76 @@ def _run_sklearn_lags(model_factory, train: pd.Series, horizon: int,
 
 
 def _run_gradient_boosting(train: pd.Series, horizon: int, period: int = 7, **_) -> np.ndarray:
+    """Feature-aware Gradient Boosting with forecast-known calendar inputs.
+
+    Historical target lags are generated recursively; only calendar features
+    can be computed for future dates without an external forecast.
+    """
     from sklearn.ensemble import GradientBoostingRegressor
-    return _run_sklearn_lags(
-        lambda: GradientBoostingRegressor(n_estimators=200, max_depth=3,
-                                          learning_rate=0.08, subsample=0.9),
-        train, horizon, period)
+    from capabilities.feature_contract import select_known_future_features
+
+    lags = tuple(l for l in (1, 2, 3, period, 2 * period) if l < len(train) - 5)
+    if not lags:
+        raise ValueError("Insufficient history for Gradient Boosting lags")
+    calendar = select_known_future_features(
+        ("dow", "month", "is_month_end"), target_column="revenue")
+    X = _make_lag_matrix(train, lags)
+    X["month"] = train.index.month
+    X["is_month_end"] = train.index.is_month_end.astype(int)
+    cols = [f"lag{lag}" for lag in lags] + calendar
+    valid = X[cols].notna().all(axis=1) & train.notna()
+    if valid.sum() < 20:
+        raise ValueError("Insufficient complete training observations")
+    model = GradientBoostingRegressor(
+        n_estimators=200, max_depth=3, learning_rate=0.08,
+        subsample=0.9, random_state=0)
+    model.fit(X.loc[valid, cols], train.loc[valid])
+    history = train.copy()
+    freq = pd.infer_freq(train.index) or "D"
+    predictions = []
+    for _ in range(horizon):
+        next_date = history.index[-1] + pd.tseries.frequencies.to_offset(freq)
+        row = {f"lag{lag}": history.iloc[-lag] for lag in lags}
+        row.update({"dow": next_date.dayofweek, "month": next_date.month,
+                    "is_month_end": int(next_date.is_month_end)})
+        prediction = float(model.predict(pd.DataFrame([row], columns=cols))[0])
+        predictions.append(prediction)
+        history.loc[next_date] = prediction
+    return np.asarray(predictions)
 
 
 def _run_random_forest(train: pd.Series, horizon: int, period: int = 7, **_) -> np.ndarray:
+    """Random Forest with recursive historical lags and future-known calendar features."""
     from sklearn.ensemble import RandomForestRegressor
-    return _run_sklearn_lags(
-        lambda: RandomForestRegressor(n_estimators=200, max_depth=8, n_jobs=-1,
-                                      random_state=0),
-        train, horizon, period)
+    from capabilities.feature_contract import select_known_future_features
+
+    lags = tuple(l for l in (1, 2, 3, period, 2 * period) if l < len(train) - 5)
+    if not lags:
+        raise ValueError("Insufficient history for Random Forest lags")
+    calendar = select_known_future_features(
+        ("dow", "month", "is_month_end"), target_column="revenue")
+    X = _make_lag_matrix(train, lags)
+    X["month"] = train.index.month
+    X["is_month_end"] = train.index.is_month_end.astype(int)
+    cols = [f"lag{lag}" for lag in lags] + calendar
+    valid = X[cols].notna().all(axis=1) & train.notna()
+    if valid.sum() < 20:
+        raise ValueError("Insufficient complete training observations")
+    model = RandomForestRegressor(n_estimators=200, max_depth=8, n_jobs=-1,
+                                  random_state=0)
+    model.fit(X.loc[valid, cols], train.loc[valid])
+    history = train.copy()
+    freq = pd.infer_freq(train.index) or "D"
+    predictions = []
+    for _ in range(horizon):
+        next_date = history.index[-1] + pd.tseries.frequencies.to_offset(freq)
+        row = {f"lag{lag}": history.iloc[-lag] for lag in lags}
+        row.update({"dow": next_date.dayofweek, "month": next_date.month,
+                    "is_month_end": int(next_date.is_month_end)})
+        prediction = float(model.predict(pd.DataFrame([row], columns=cols))[0])
+        predictions.append(prediction)
+        history.loc[next_date] = prediction
+    return np.asarray(predictions)
 
 
 def _run_lstm(train: pd.Series, horizon: int, period: int = 7, **_) -> np.ndarray:
@@ -355,21 +439,24 @@ class CandidateResult:
 
 def prepare_series(df: pd.DataFrame, date_col: str, target_col: str,
                    preprocessing: Optional[dict] = None) -> pd.Series:
-    """Aggregate to a regular series; apply Planner/Critic preprocessing."""
+    """Aggregate to a regular series; defer fitted transforms to backtesting."""
     ts = (df[[date_col, target_col]].dropna()
           .groupby(date_col)[target_col].sum().sort_index())
     prep = preprocessing or {}
-    if prep.get("winsorize"):
-        lo, hi = ts.quantile(0.01), ts.quantile(0.99)
-        ts = ts.clip(lo, hi)
+    # Winsorization is fitted on each training fold in run_backtest.
     if prep.get("fill_gaps"):
-        freq = pd.infer_freq(ts.index) or "D"
-        ts = ts.asfreq(freq).interpolate(limit=7)
+        freq = (pd.infer_freq(ts.index) if len(ts.index) >= 3 else None) or "D"
+        # Never interpolate from a later observation into an earlier date:
+        # that would expose future billing values to chronological backtests.
+        # This is a past-only carry-forward assumption, NOT a claim that
+        # missing billing dates represent actual revenue.
+        ts = ts.asfreq(freq).ffill(limit=7)
     return ts
 
 
 def run_backtest(ts: pd.Series, candidates: list[str], period: int = 7,
-                 horizon: int = 30, n_folds: int = 3) -> dict[str, CandidateResult]:
+                 horizon: int = 30, n_folds: int = 3,
+                 preprocessing: Optional[dict] = None) -> dict[str, CandidateResult]:
     """Rolling-origin: k folds, each trains on prefix, predicts next horizon."""
     registry = {m.name: m for m in build_registry()}
     horizon = min(horizon, max(len(ts) // 6, 7))
@@ -387,6 +474,9 @@ def run_backtest(ts: pd.Series, candidates: list[str], period: int = 7,
         res = CandidateResult(name, model.family)
         for start in fold_starts:
             train, test = ts.iloc[:start], ts.iloc[start:start + horizon]
+            if (preprocessing or {}).get("winsorize"):
+                lo, hi = train.quantile([0.01, 0.99])
+                train = train.clip(lo, hi)
             if test.empty:
                 continue
             try:
@@ -400,7 +490,11 @@ def run_backtest(ts: pd.Series, candidates: list[str], period: int = 7,
         # final future forecast on full history (only if backtest worked)
         if res.fold_mape and not res.error:
             try:
-                res.forecast = model.runner(ts, horizon, period=period)
+                fit_ts = ts
+                if (preprocessing or {}).get("winsorize"):
+                    lo, hi = ts.quantile([0.01, 0.99])
+                    fit_ts = ts.clip(lo, hi)
+                res.forecast = model.runner(fit_ts, horizon, period=period)
             except Exception as e:  # noqa: BLE001
                 res.error = f"final fit failed: {e}"
         results[name] = res

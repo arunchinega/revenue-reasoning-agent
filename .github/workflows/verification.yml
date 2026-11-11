@@ -1,0 +1,64 @@
+name: Verification checks
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [feature/nextgen-reasoning-foundation]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verification:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+      - name: Install feature-test dependencies
+        run: python -m pip install 'pandas>=2.2,<3' 'numpy>=1.26,<3' 'scikit-learn>=1.5,<2' 'scipy>=1.13,<2' 'xgboost>=2.1,<4' 'PyYAML>=6,<7'
+      - name: Syntax check
+        run: python -m compileall -q core/verification.py core/dispatcher.py tests/test_verification.py tests/test_feature_engineering.py capabilities/feature_contract.py tests/test_feature_contract.py tests/test_gradient_boosting_features.py tests/test_random_forest_features.py tests/test_xgboost_features.py tests/test_benchmark.py capabilities/benchmark.py capabilities/forecasting.py tests/test_e2e_smoke.py core/hitl.py tests/test_hitl_gate.py tests/test_streamlit_hitl_contract.py tests/test_stable_streamlit_render.py tests/test_forecast_diagnostics.py tests/test_billing_calendar_safety.py tests/test_fold_winsorization.py agents/planner_critic.py scripts/diagnose_forecast_csv.py app.py
+      - name: Run verification unit tests
+        run: python -m unittest discover -s tests -p 'test_verification.py' -v
+      - name: Run feature engineering regression tests
+        run: python -m unittest discover -s tests -p 'test_feature_engineering.py' -v
+      - name: Run forecast feature contract tests
+        run: python -m unittest discover -s tests -p 'test_feature_contract.py' -v
+      - name: Run Gradient Boosting feature tests
+        run: python -m unittest discover -s tests -p 'test_gradient_boosting_features.py' -v
+      - name: Run Random Forest feature tests
+        run: python -m unittest discover -s tests -p 'test_random_forest_features.py' -v
+      - name: Run XGBoost feature tests
+        run: python -m unittest discover -s tests -p 'test_xgboost_features.py' -v
+      - name: Run chronological benchmark tests
+        run: python -m unittest discover -s tests -p 'test_benchmark.py' -v
+      - name: Run HITL safety gate tests
+        run: python -m unittest discover -s tests -p 'test_hitl_gate.py' -v
+      - name: Check Streamlit HITL controls
+        run: python -m unittest discover -s tests -p 'test_streamlit_hitl_contract.py' -v
+      - name: Check stable Streamlit rendering contract
+        run: python -m unittest discover -s tests -p 'test_stable_streamlit_render.py' -v
+      - name: Run CSV-to-forecast integration smoke test
+        run: python -m unittest discover -s tests -p 'test_e2e_smoke.py' -v
+      - name: Test read-only forecast diagnostics
+        run: python -m unittest discover -s tests -p 'test_forecast_diagnostics.py' -v
+      - name: Test past-only billing calendar handling
+        run: python -m unittest discover -s tests -p 'test_billing_calendar_safety.py' -v
+      - name: Test training-fold-only winsorization
+        run: python -m unittest discover -s tests -p 'test_fold_winsorization.py' -v
+      - name: Run synthetic forecasting comparison
+        run: python -m scripts.run_forecasting_benchmark
+      - name: Upload benchmark report
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: synthetic-forecast-benchmark
+          path: benchmark_results/
+          if-no-files-found: warn

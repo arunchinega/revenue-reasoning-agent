@@ -318,7 +318,8 @@ def run_forecasting_capability(state: RunState, use_llm: bool = True,
     for attempt in range(MAX_RETRIES + 1):
         ts = prepare_series(state.raw_df, cm["date_column"], cm["target_column"],
                             plan.get("preprocessing"))
-        results = run_backtest(ts, plan["candidates"], period=period, horizon=horizon)
+        results = run_backtest(ts, plan["candidates"], period=period, horizon=horizon,
+                               preprocessing=plan.get("preprocessing"))
         verdict = critique_forecasting(state, results, plan, attempt, use_llm=use_llm)
 
         if verdict["verdict"] in ("accept_single", "accept_ensemble", "escalate"):

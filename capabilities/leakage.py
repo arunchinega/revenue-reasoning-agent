@@ -125,6 +125,7 @@ def run_leakage_capability(state: RunState) -> dict:
         anomaly_votes[rec["row_index"]] = rec["votes"]
 
     rule_hits: dict[int, list[str]] = {}
+    per_row_rule_impacts: dict[int, dict[str, float]] = {}
     rule_impact: dict[int, float] = {}
     rules_fired: dict[str, dict] = {}
     seen = set()
@@ -145,6 +146,7 @@ def run_leakage_capability(state: RunState) -> dict:
         }
         for idx in df.index[mask]:
             rule_hits.setdefault(int(idx), []).append(rule_name)
+            per_row_rule_impacts.setdefault(int(idx), {})[rule_name] = float(impact.loc[idx])
             # max, not sum: rules are alternative explanations of the SAME
             # missing money — a zero-bill row tripping both 'unbilled' and
             # 'under-billing' leaked its expected revenue once, not twice
@@ -173,12 +175,30 @@ def run_leakage_capability(state: RunState) -> dict:
     candidates.sort(key=lambda r: r["impact_estimate"], reverse=True)
 
     total_impact = round(sum(r["impact_estimate"] for r in candidates), 2)
+    gross_rule_impact = round(sum(
+        float(v.get("impact_total", 0.0))
+        for v in rules_fired.values() if v.get("applicable")), 2)
+    overlap_impact = round(gross_rule_impact - total_impact, 2)
+    overlap_records = sum(1 for impacts in per_row_rule_impacts.values()
+                          if sum(value > 0 for value in impacts.values()) > 1)
+    reconciliation = {
+        "method": "sum_of_row_maximum_rule_impact",
+        "gross_rule_impact": gross_rule_impact,
+        "deduplicated_impact": total_impact,
+        "overlap_impact": overlap_impact,
+        "overlap_record_count": overlap_records,
+        "reconciled": abs(gross_rule_impact - overlap_impact - total_impact) <= 0.02,
+        "note": ("Rules can describe the same suspected discrepancy; per-row "
+                 "maximum avoids summing alternative explanations. Estimates "
+                 "are not confirmed recoverable revenue."),
+    }
     out = {
         "domain": state.domain.get("name", "generic"),
         "rules_fired": rules_fired,
         "candidates": candidates[:200],
         "candidate_count": len(candidates),
         "total_impact_estimate": total_impact,
+        "reconciliation": reconciliation,
     }
     state.results["leakage"] = out
     state.ledger.log(
@@ -192,6 +212,7 @@ def run_leakage_capability(state: RunState) -> dict:
         evidence=["domain.leakage_rules", "anomaly.votes",
                   "feature.billed_vs_expected_delta"],
         data={"total_impact_estimate": total_impact,
+              "reconciliation": reconciliation,
               "by_rule": {k: v.get("impact_total") for k, v in rules_fired.items()
                           if v.get("applicable")}},
     )
