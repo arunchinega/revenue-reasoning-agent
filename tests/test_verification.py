@@ -21,7 +21,9 @@ class VerificationTests(unittest.TestCase):
         report = verify_results(state)
         self.assertEqual(report["status"], "qualified")
         self.assertEqual(report["verified_count"], 1)
-        self.assertEqual(report["unverified_count"], 1)
+        self.assertEqual(report["unverified_count"], 2)
+        self.assertEqual({c["claim"] for c in report["checks"] if c["status"] == "unverified"},
+                         {"leakage_recoverability", "leakage_claim_language"})
 
     def test_rule_overlap_requires_reconciliation(self):
         state = SimpleNamespace(results={"leakage": {
